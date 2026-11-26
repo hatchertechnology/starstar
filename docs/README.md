@@ -8,6 +8,8 @@ Index of reference material for the starstar 3D printer management system.
 
 ## Design and plans
 
+- [PostgreSQL and local container handoff](postgres-container-handoff.md): remaining database conversion, Compose, testing and deployment preparation.
+
 - [Design spec](superpowers/specs/2026-11-26-printer-control-auth-mcp-design.md): printer control, built-in auth, MCP, web UI and the CLI skill.
 - [Implementation plan](superpowers/plans/2026-11-26-printer-control-auth-mcp.md): how the work is split and sequenced.
 

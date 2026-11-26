@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let config = Config::from_env();
 
     match check_config(&config) {
-        Ok(Some(warning)) => eprintln!("{warning}"),
+        Ok(Some(warning)) => println!("{warning}"),
         Ok(None) => {}
         Err(err) => {
             eprintln!("{err}");

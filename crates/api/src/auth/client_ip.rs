@@ -102,4 +102,22 @@ mod tests {
         let p = parts(Some("10.0.0.2:80"), None);
         assert_eq!(client_ip(&p, &net), "10.0.0.2");
     }
+
+    #[test]
+    fn loopback_bind_defaults_believe_a_local_proxy() {
+        let config = crate::config::Config::from_lookup(|_| None);
+        let p = parts(Some("127.0.0.1:5000"), Some("203.0.113.9"));
+        assert_eq!(client_ip(&p, &config.trusted_proxies), "203.0.113.9");
+        let p = parts(Some("[::1]:5000"), Some("203.0.113.9"));
+        assert_eq!(client_ip(&p, &config.trusted_proxies), "203.0.113.9");
+    }
+
+    #[test]
+    fn non_loopback_bind_with_unset_proxies_ignores_the_header() {
+        let config = crate::config::Config::from_lookup(|k| {
+            (k == "STARSTAR_BIND").then(|| "0.0.0.0:8080".to_owned())
+        });
+        let p = parts(Some("192.168.1.7:5000"), Some("203.0.113.9"));
+        assert_eq!(client_ip(&p, &config.trusted_proxies), "192.168.1.7");
+    }
 }

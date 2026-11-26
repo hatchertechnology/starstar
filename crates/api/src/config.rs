@@ -32,7 +32,9 @@ pub struct Config {
     /// `STARSTAR_WEB_DIR`, default `web/.output/public`.
     pub web_dir: String,
     /// `STARSTAR_TRUSTED_PROXIES`: comma-separated CIDRs whose
-    /// `X-Forwarded-For` header is believed. Default empty.
+    /// `X-Forwarded-For` header is believed. Default: `127.0.0.1/32` and
+    /// `::1/128` when `bind` is a loopback address, otherwise empty. Any
+    /// explicit value replaces the default.
     pub trusted_proxies: Vec<IpNet>,
     /// Entries of `STARSTAR_TRUSTED_PROXIES` that are neither an IP address
     /// nor a CIDR. `check_config` refuses to start while this is non-empty.
@@ -72,7 +74,20 @@ impl Config {
     /// Reads the environment, falling back to defaults. Invalid numbers fall
     /// back to the default too.
     pub fn from_env() -> Self {
-        let var = |k: &str| env::var(k).ok().filter(|v| !v.is_empty());
+        Self::from_lookup(|k| env::var(k).ok())
+    }
+
+    /// Like [`Config::from_env`], reading settings through `lookup`. Empty
+    /// values count as unset.
+    ///
+    /// When `STARSTAR_TRUSTED_PROXIES` is unset and `STARSTAR_BIND` is a
+    /// loopback address, `127.0.0.1/32` and `::1/128` are trusted: only local
+    /// processes (a reverse proxy on the same host) can reach a loopback
+    /// listener, so believing their `X-Forwarded-For` adds no remote attack
+    /// surface, and without it every client would share one rate-limit key.
+    /// Set the variable to override (any value replaces the default).
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let var = |k: &str| lookup(k).filter(|v| !v.is_empty());
         let mb = |k: &str, default: u64| {
             var(k)
                 .and_then(|v| v.parse::<u64>().ok())
@@ -80,12 +95,15 @@ impl Config {
                 * MIB
         };
         let defaults = Self::default();
-        let (trusted_proxies, invalid_trusted_proxies) = var("STARSTAR_TRUSTED_PROXIES")
-            .map(|v| parse_trusted_proxies(&v))
-            .unwrap_or_default();
+        let bind = var("STARSTAR_BIND").unwrap_or(defaults.bind);
+        let (trusted_proxies, invalid_trusted_proxies) = match var("STARSTAR_TRUSTED_PROXIES") {
+            Some(v) => parse_trusted_proxies(&v),
+            None if bind_is_loopback(&bind) => (loopback_networks(), Vec::new()),
+            None => (Vec::new(), Vec::new()),
+        };
         Self {
             database: var("STARSTAR_DATABASE").unwrap_or(defaults.database),
-            bind: var("STARSTAR_BIND").unwrap_or(defaults.bind),
+            bind,
             public_url: var("STARSTAR_PUBLIC_URL")
                 .map(|u| normalize_public_url(&u))
                 .unwrap_or(defaults.public_url),
@@ -98,6 +116,18 @@ impl Config {
             invalid_trusted_proxies,
         }
     }
+}
+
+fn bind_is_loopback(bind: &str) -> bool {
+    bind.parse::<std::net::SocketAddr>()
+        .is_ok_and(|a| a.ip().is_loopback())
+}
+
+fn loopback_networks() -> Vec<IpNet> {
+    ["127.0.0.1/32", "::1/128"]
+        .iter()
+        .filter_map(|n| n.parse().ok())
+        .collect()
 }
 
 impl Default for Config {
@@ -136,6 +166,57 @@ mod tests {
             "http://127.0.0.1:8080"
         );
         assert_eq!(normalize_public_url("not a url/"), "not a url");
+    }
+
+    fn lookup<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| (*v).to_owned())
+        }
+    }
+
+    fn shown(c: &Config) -> Vec<String> {
+        c.trusted_proxies.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn from_lookup_normalizes_the_public_url() {
+        let c = Config::from_lookup(lookup(&[("STARSTAR_PUBLIC_URL", "HTTPS://X.Example/")]));
+        assert_eq!(c.public_url, "https://x.example");
+        assert_eq!(
+            Config::from_lookup(|_| None).public_url,
+            Config::default().public_url
+        );
+    }
+
+    #[test]
+    fn loopback_bind_trusts_loopback_proxies_by_default() {
+        assert_eq!(
+            shown(&Config::from_lookup(|_| None)),
+            ["127.0.0.1/32", "::1/128"]
+        );
+        let c = Config::from_lookup(lookup(&[("STARSTAR_BIND", "[::1]:9000")]));
+        assert_eq!(shown(&c), ["127.0.0.1/32", "::1/128"]);
+    }
+
+    #[test]
+    fn non_loopback_bind_trusts_no_proxies_by_default() {
+        for bind in ["0.0.0.0:8080", "192.168.1.5:8080", "[::]:8080"] {
+            let c = Config::from_lookup(lookup(&[("STARSTAR_BIND", bind)]));
+            assert!(c.trusted_proxies.is_empty(), "{bind}");
+        }
+    }
+
+    #[test]
+    fn an_explicit_value_replaces_the_loopback_default() {
+        let c = Config::from_lookup(lookup(&[("STARSTAR_TRUSTED_PROXIES", "10.0.0.0/8")]));
+        assert_eq!(shown(&c), ["10.0.0.0/8"]);
+        // Even an all-invalid value does not fall back to the default.
+        let c = Config::from_lookup(lookup(&[("STARSTAR_TRUSTED_PROXIES", "nope")]));
+        assert!(c.trusted_proxies.is_empty());
+        assert_eq!(c.invalid_trusted_proxies, ["nope"]);
     }
 
     #[test]

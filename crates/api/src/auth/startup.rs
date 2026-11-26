@@ -70,6 +70,12 @@ pub fn check_config(config: &Config) -> Result<Option<String>, StartupError> {
             config.bind
         )));
     }
+    if url.scheme() == "https" && config.trusted_proxies.is_empty() {
+        return Ok(Some(
+            "warning: STARSTAR_PUBLIC_URL is https but STARSTAR_TRUSTED_PROXIES is empty, so behind a TLS proxy every request appears to come from the proxy and the per-IP rate limits apply to all clients together; set STARSTAR_TRUSTED_PROXIES to the proxy's address"
+                .to_owned(),
+        ));
+    }
     Ok(None)
 }
 
@@ -131,15 +137,38 @@ mod tests {
                 .is_some()
         );
         assert!(
-            check_config(&cfg("0.0.0.0:8080", "https://print.example.com", false))
-                .unwrap()
-                .is_none()
+            check_config(&Config {
+                trusted_proxies: vec!["10.0.0.1/32".parse().unwrap()],
+                ..cfg("0.0.0.0:8080", "https://print.example.com", false)
+            })
+            .unwrap()
+            .is_none()
         );
         assert!(
             check_config(&cfg("[::1]:8080", "http://[::1]:8080", false))
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn https_without_trusted_proxies_warns_that_limits_are_shared() {
+        let c = Config {
+            setup_token: Some("a-very-secret-setup-token".into()),
+            trusted_proxies: Vec::new(),
+            ..cfg("0.0.0.0:8080", "https://print.example.com", false)
+        };
+        let warning = check_config(&c).unwrap().expect("a warning");
+        assert!(warning.contains("STARSTAR_TRUSTED_PROXIES"), "{warning}");
+        assert!(warning.contains("all clients"), "{warning}");
+        assert!(!warning.contains("very-secret"), "{warning}");
+        assert!(!warning.contains("print.example.com"), "{warning}");
+        // The loopback-bind defaults trust local proxies, so no warning.
+        let c = Config::from_lookup(|k| match k {
+            "STARSTAR_PUBLIC_URL" => Some("https://print.example.com".into()),
+            _ => None,
+        });
+        assert!(check_config(&c).unwrap().is_none());
     }
 
     #[test]

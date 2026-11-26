@@ -35,6 +35,15 @@ pub struct Config {
     /// `X-Forwarded-For` header is believed. Default: `127.0.0.1/32` and
     /// `::1/128` when `bind` is a loopback address, otherwise empty. Any
     /// explicit value replaces the default.
+    ///
+    /// Every hop listed here must **overwrite or append** the real peer
+    /// address to `X-Forwarded-For`; only the rightmost untrusted entry is
+    /// believed. A hop that passes the client's header through unchanged
+    /// (nginx with a bare `proxy_pass`) or that forwards raw TCP (`socat`,
+    /// `ssh -L`, HAProxy `mode tcp`, `kubectl port-forward`) lets the client
+    /// pick its own rate-limit key, or makes every client share the hop's
+    /// address. The per-username sign-in limit holds either way. See the
+    /// README, "Deploying behind a proxy".
     pub trusted_proxies: Vec<IpNet>,
     /// Entries of `STARSTAR_TRUSTED_PROXIES` that are neither an IP address
     /// nor a CIDR. `check_config` refuses to start while this is non-empty.

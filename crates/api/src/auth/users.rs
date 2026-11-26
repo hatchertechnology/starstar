@@ -12,8 +12,9 @@ use starstar_shared::auth::{
 use super::client_ip::client_ip;
 use super::cookies::get_cookie;
 use super::password::{MAX_PASSWORD_CHARS, validate_password};
-use super::session::limiter_key;
+use super::session::{limiter_key, user_limiter_key};
 use super::setup::USERNAME_RULES;
+use super::store::AuthStoreError;
 use super::{Admin, Viewer};
 use crate::AppState;
 use crate::error::ApiError;
@@ -97,22 +98,41 @@ async fn change_password(
         &client_ip(&parts, &state.config.trusted_proxies),
     );
     let now = auth.now();
+    let user_key = user_limiter_key(&caller.username);
+    let too_many =
+        || ApiError::TooManyRequests("too many failed attempts, try again later".to_owned());
     // Reserve the attempt before any await, so parallel guesses all count.
-    if !auth.login_limiter().try_begin(&key, now) {
-        return Err(ApiError::TooManyRequests(
-            "too many failed attempts, try again later".to_owned(),
-        ));
+    if !auth.login_user_limiter().try_begin(&user_key, now) {
+        return Err(too_many());
     }
-    let ok = req.current_password.chars().count() <= MAX_PASSWORD_CHARS
-        && auth
+    if !auth.login_limiter().try_begin(&key, now) {
+        auth.login_user_limiter().refund(&user_key);
+        return Err(too_many());
+    }
+    let ok = if req.current_password.chars().count() > MAX_PASSWORD_CHARS {
+        false
+    } else {
+        match auth
             .verify_password(req.current_password, user.password_hash.clone())
-            .await?;
+            .await
+        {
+            Ok(v) => v,
+            Err(AuthStoreError::Busy) => {
+                // No password work ran: give both attempts back.
+                auth.login_limiter().refund(&key);
+                auth.login_user_limiter().refund(&user_key);
+                return Err(AuthStoreError::Busy.into());
+            }
+            Err(err) => return Err(err.into()),
+        }
+    };
     if !ok {
         return Err(ApiError::Forbidden(
             "current password is incorrect".to_owned(),
         ));
     }
     auth.login_limiter().reset(&key);
+    auth.login_user_limiter().refund(&user_key);
 
     validate_password(&req.new_password)?;
     let new_hash = auth.hash_password(req.new_password).await?;

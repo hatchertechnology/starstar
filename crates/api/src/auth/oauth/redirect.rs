@@ -252,5 +252,8 @@ mod tests {
         assert!(!redirect_allowed(&c, "https://print.lan./cb", proxy, B));
         // Other hosts are unaffected.
         assert!(is_registrable("https://app.example.com./cb", proxy, B));
+        // `localhost.` is still loopback.
+        let url = Url::parse("http://localhost.:8080/cb").unwrap();
+        assert!(lands_on_self(&url, "https://print.lan", "127.0.0.1:8080"));
     }
 }

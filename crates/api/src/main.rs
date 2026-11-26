@@ -18,13 +18,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let config = Config::from_env();
 
     match check_config(&config) {
-        Ok(Some(warning)) => println!("{warning}"),
+        Ok(Some(warning)) => eprintln!("{warning}"),
         Ok(None) => {}
         Err(err) => {
             eprintln!("{err}");
             std::process::exit(1);
         }
     }
+
+    println!(
+        "{}",
+        starstar_api::auth::startup::trusted_proxies_line(&config)
+    );
 
     let hasher = Hasher::secure();
     // Compute the unknown-user dummy hash now, not on the first bad login.

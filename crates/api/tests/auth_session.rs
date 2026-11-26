@@ -260,21 +260,121 @@ async fn argon2_work_waits_for_a_global_permit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn waiting_too_long_for_a_permit_is_a_503_with_retry_after() {
-    let (app, state) = test_app();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let (app, state) = test_app();
+        create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+        state
+            .auth
+            .set_argon_wait(std::time::Duration::from_millis(100));
+        let held = hold_all_permits(&state).await;
+        let started = std::time::Instant::now();
+        let r = post_login(&app, "kerry", "pw-kerry-123").await;
+        assert_eq!(r.status, 503, "{}", r.body);
+        assert_eq!(r.headers.get("retry-after").unwrap(), "5");
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        // A flood of timed-out attempts must not use up the limiters: no
+        // password work ran, so nothing was guessed.
+        for _ in 0..5 {
+            assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 503);
+        }
+        drop(held);
+        assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
+    })
+    .await
+    .expect("must not hang");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timed_out_change_password_attempts_are_refunded() {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let (app, state) = test_app();
+        create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+        let b = login(&app, "kerry", "pw-kerry-123").await;
+        state
+            .auth
+            .set_argon_wait(std::time::Duration::from_millis(50));
+        let held = hold_all_permits(&state).await;
+        for _ in 0..6 {
+            assert_eq!(change_password(&app, &b).await.status, 503);
+        }
+        drop(held);
+        assert_eq!(change_password(&app, &b).await.status, 204);
+    })
+    .await
+    .expect("must not hang");
+}
+
+async fn change_password(app: &Router, b: &Browser) -> TestResponse {
+    let req = b
+        .apply(Request::put("/api/me/password"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"current_password": "pw-kerry-123", "new_password": "pw-new-456-xyz"})
+                .to_string(),
+        ))
+        .unwrap();
+    send(app, req).await
+}
+
+fn login_from(peer: &str, xff: &str, user: &str, pw: &str) -> Request<Body> {
+    let mut req = Request::post("/api/session")
+        .header("content-type", "application/json")
+        .header("x-forwarded-for", xff)
+        .body(Body::from(
+            json!({"username": user, "password": pw}).to_string(),
+        ))
+        .unwrap();
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        peer.parse::<std::net::SocketAddr>().unwrap(),
+    ));
+    req
+}
+
+#[tokio::test]
+async fn spoofed_forwarded_for_values_cannot_dodge_the_per_user_limit() {
+    let mut state = test_state();
+    // The loopback-bind default: a local proxy's X-Forwarded-For is believed.
+    state.config = Arc::new(Config::from_lookup(|_| None));
+    let app = router(state.clone());
     create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
-    state
-        .auth
-        .set_argon_wait(std::time::Duration::from_millis(100));
-    let held = hold_all_permits(&state).await;
-    let started = std::time::Instant::now();
-    let r = post_login(&app, "kerry", "pw-kerry-123").await;
-    assert_eq!(r.status, 503, "{}", r.body);
-    assert_eq!(r.headers.get("retry-after").unwrap(), "5");
-    assert!(started.elapsed() < std::time::Duration::from_secs(3));
-    drop(held);
-    // The timed-out attempt counted against the limiter, but no password
-    // work ran; with a permit free the same login now succeeds.
-    assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
+    // A local hop that passes the client's X-Forwarded-For through unchanged.
+    let mut last = 0;
+    for i in 0..25 {
+        let xff = format!("198.51.100.{}", i + 1);
+        last = send(
+            &app,
+            login_from("127.0.0.1:5000", &xff, "kerry", "wrong-pw"),
+        )
+        .await
+        .status
+        .as_u16();
+    }
+    assert_eq!(last, 429);
+    // Even the right password is refused from a fresh spoofed address.
+    let r = send(
+        &app,
+        login_from("127.0.0.1:5000", "203.0.113.200", "kerry", "pw-kerry-123"),
+    )
+    .await;
+    assert_eq!(r.status, 429);
+}
+
+#[tokio::test]
+async fn a_successful_login_refunds_the_per_user_limit() {
+    let mut state = test_state();
+    // The loopback-bind default: a local proxy's X-Forwarded-For is believed.
+    state.config = Arc::new(Config::from_lookup(|_| None));
+    let app = router(state.clone());
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    for i in 0..60 {
+        let xff = format!("198.51.100.{}", i + 1);
+        let r = send(
+            &app,
+            login_from("127.0.0.1:5000", &xff, "kerry", "pw-kerry-123"),
+        )
+        .await;
+        assert_eq!(r.status, 200, "login {i}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

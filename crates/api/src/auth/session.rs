@@ -1,5 +1,6 @@
 //! `/api/session`: sign in, who am I, sign out.
 
+use super::store::AuthStoreError;
 use axum::extract::State;
 use axum::http::header::{CACHE_CONTROL, SET_COOKIE};
 use axum::http::request::Parts;
@@ -30,6 +31,12 @@ pub(crate) fn limiter_key(username: &str, ip: &str) -> String {
         .map(|b| format!("{b:02x}"))
         .collect();
     format!("{digest}|{ip}")
+}
+
+/// Rate-limit key that ignores the client IP: SHA-256 of the lowercased
+/// username.
+pub(crate) fn user_limiter_key(username: &str) -> String {
+    limiter_key(username, "").trim_end_matches('|').to_owned()
 }
 
 fn bad_login() -> ApiError {
@@ -69,6 +76,8 @@ async fn login(
     let now = state.auth.now();
     let limiter = state.auth.login_limiter();
     let ip_limiter = state.auth.login_ip_limiter();
+    let user_limiter = state.auth.login_user_limiter();
+    let user_key = user_limiter_key(&req.username);
     let too_many = || {
         ApiError::TooManyRequests("too many failed sign-in attempts, try again later".to_owned())
     };
@@ -76,25 +85,37 @@ async fn login(
     if !ip_limiter.try_begin(&ip, now) {
         return Err(too_many());
     }
+    if !user_limiter.try_begin(&user_key, now) {
+        ip_limiter.refund(&ip);
+        return Err(too_many());
+    }
     if !limiter.try_begin(&key, now) {
         ip_limiter.refund(&ip);
+        user_limiter.refund(&user_key);
         return Err(too_many());
     }
 
     let auth = &state.auth;
     let user = auth.user_by_name(&req.username.to_lowercase())?;
     let password = req.password;
-    let ok = match &user {
+    let verified = match &user {
         Some(user) => {
-            let verified = auth
-                .verify_password(password, user.password_hash.clone())
-                .await?;
-            verified && !user.disabled
+            auth.verify_password(password, user.password_hash.clone())
+                .await
         }
-        None => {
-            auth.dummy_verify(password).await?;
-            false
+        None => auth.dummy_verify(password).await.map(|()| false),
+    };
+    let ok = match verified {
+        Ok(v) => v && user.as_ref().is_some_and(|u| !u.disabled),
+        Err(AuthStoreError::Busy) => {
+            // No password work ran, so nothing was guessed: give the
+            // attempt back and let the client retry.
+            limiter.refund(&key);
+            ip_limiter.refund(&ip);
+            user_limiter.refund(&user_key);
+            return Err(AuthStoreError::Busy.into());
         }
+        Err(err) => return Err(err.into()),
     };
     let Some(user) = user.filter(|_| ok) else {
         return Err(bad_login());
@@ -102,6 +123,7 @@ async fn login(
 
     limiter.reset(&key);
     ip_limiter.refund(&ip);
+    user_limiter.refund(&user_key);
     let session = state.auth.create_session(user.id)?;
     let info = SessionInfo {
         username: user.username,

@@ -29,7 +29,22 @@ fn bad_url(why: &str) -> StartupError {
     StartupError::InvalidPublicUrl(format!("STARSTAR_PUBLIC_URL is invalid: {why}"))
 }
 
-/// Validates the config. On success returns an optional warning for stderr.
+/// The effective trusted proxy list, for the startup log.
+pub fn trusted_proxies_line(config: &Config) -> String {
+    if config.trusted_proxies.is_empty() {
+        return "trusted proxies: none (X-Forwarded-For is ignored)".to_owned();
+    }
+    let nets: Vec<String> = config
+        .trusted_proxies
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
+    format!("trusted proxies: {}", nets.join(", "))
+}
+
+/// Validates the config. On success returns an optional warning, which the
+/// caller prints to stderr. Only the first applicable warning is returned
+/// (plain HTTP, then the proxy list); callers that add more must return a list.
 pub fn check_config(config: &Config) -> Result<Option<String>, StartupError> {
     let bind: SocketAddr = config
         .bind
@@ -149,6 +164,17 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_effective_trusted_proxy_list_is_printable() {
+        let c = Config::from_lookup(|_| None);
+        assert_eq!(
+            trusted_proxies_line(&c),
+            "trusted proxies: 127.0.0.1/32, ::1/128"
+        );
+        let c = Config::from_lookup(|k| (k == "STARSTAR_BIND").then(|| "0.0.0.0:8080".into()));
+        assert!(trusted_proxies_line(&c).contains("none"));
     }
 
     #[test]

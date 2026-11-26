@@ -88,6 +88,7 @@ pub struct AuthStore {
     setup_code: Mutex<Option<String>>,
     login_limiter: RateLimiter,
     login_ip_limiter: RateLimiter,
+    login_user_limiter: RateLimiter,
     authorize_limiter: RateLimiter,
     argon_permits: Arc<Semaphore>,
     argon_wait_ms: AtomicU64,
@@ -106,6 +107,7 @@ impl AuthStore {
             setup_code: Mutex::new(None),
             login_limiter: RateLimiter::new(5, 900),
             login_ip_limiter: RateLimiter::new(30, 900),
+            login_user_limiter: RateLimiter::new(20, 900),
             authorize_limiter: RateLimiter::new(30, 600),
             argon_permits: Arc::new(Semaphore::new(argon_permit_count())),
             argon_wait_ms: AtomicU64::new(ARGON_WAIT.as_millis() as u64),
@@ -133,6 +135,15 @@ impl AuthStore {
     /// sign-ins are refunded.
     pub fn login_ip_limiter(&self) -> &RateLimiter {
         &self.login_ip_limiter
+    }
+
+    /// 20 failed sign-ins per username per 900 s, whatever the client IP. It
+    /// bounds online guessing even when the client address is attacker
+    /// chosen (a proxy hop that passes `X-Forwarded-For` through). The price
+    /// is that anyone who knows a username can lock that account for the
+    /// window. Successful sign-ins are refunded.
+    pub fn login_user_limiter(&self) -> &RateLimiter {
+        &self.login_user_limiter
     }
 
     /// 30 authorize requests per client IP per 600 s (every request counts),
@@ -256,6 +267,7 @@ impl AuthStore {
         for limiter in [
             &self.login_limiter,
             &self.login_ip_limiter,
+            &self.login_user_limiter,
             &self.authorize_limiter,
             &self.setup_limiter,
             &self.register_limiter,

@@ -237,7 +237,7 @@ pub enum FilesCommand {
         printer: String,
         /// File or folder, e.g. `usb/cube.bgcode`.
         remote: String,
-        /// Delete even if read-only or in use, and folders with everything in them.
+        /// Delete a folder even if it is not empty.
         #[arg(long)]
         force: bool,
         #[command(flatten)]

@@ -57,7 +57,7 @@ pub struct DeleteFileArgs {
     pub storage: String,
     /// File path inside the storage.
     pub path: String,
-    /// Delete the file even if the printer is printing it. Default false.
+    /// Delete a folder even if it is not empty. Default false.
     #[serde(default)]
     pub force: bool,
 }

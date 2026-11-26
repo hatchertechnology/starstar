@@ -12,6 +12,7 @@ use starstar_shared::auth::{LoginRequest, SESSION_COOKIE, SessionInfo, is_valid_
 use super::client_ip::client_ip;
 use super::cookies::{clear_session_cookies, get_cookie, session_cookies};
 use super::crypto::hash_token;
+use super::password::MAX_PASSWORD_CHARS;
 use super::session_from_parts;
 use super::store::sessions::SessionCaller;
 use crate::AppState;
@@ -55,39 +56,43 @@ async fn login(
     parts: Parts,
     Json(req): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    // Malformed usernames can never exist: fail before touching the limiter
-    // or the store, so junk keys cannot grow the limiter.
-    if req.username.len() > 64 || !is_valid_username(&req.username.to_lowercase()) {
+    // Malformed usernames can never exist, and overlong passwords never match:
+    // fail before touching the limiters, the store or argon2.
+    if req.username.len() > 64
+        || !is_valid_username(&req.username.to_lowercase())
+        || req.password.chars().count() > MAX_PASSWORD_CHARS
+    {
         return Err(bad_login());
     }
-    let key = limiter_key(
-        &req.username,
-        &client_ip(&parts, &state.config.trusted_proxies),
-    );
+    let ip = client_ip(&parts, &state.config.trusted_proxies);
+    let key = limiter_key(&req.username, &ip);
     let now = state.auth.now();
     let limiter = state.auth.login_limiter();
+    let ip_limiter = state.auth.login_ip_limiter();
+    let too_many = || {
+        ApiError::TooManyRequests("too many failed sign-in attempts, try again later".to_owned())
+    };
     // Reserve the attempt before any await, so parallel guesses all count.
+    if !ip_limiter.try_begin(&ip, now) {
+        return Err(too_many());
+    }
     if !limiter.try_begin(&key, now) {
-        return Err(ApiError::TooManyRequests(
-            "too many failed sign-in attempts, try again later".to_owned(),
-        ));
+        ip_limiter.refund(&ip);
+        return Err(too_many());
     }
 
-    let hasher = state.auth.hasher();
-    let user = state.auth.user_by_name(&req.username.to_lowercase())?;
+    let auth = &state.auth;
+    let user = auth.user_by_name(&req.username.to_lowercase())?;
     let password = req.password;
     let ok = match &user {
         Some(user) => {
-            let hash = user.password_hash.clone();
-            let verified = tokio::task::spawn_blocking(move || hasher.verify(&password, &hash))
-                .await
-                .map_err(|_| ApiError::Internal("internal error".to_owned()))?;
+            let verified = auth
+                .verify_password(password, user.password_hash.clone())
+                .await?;
             verified && !user.disabled
         }
         None => {
-            tokio::task::spawn_blocking(move || hasher.dummy_verify(&password))
-                .await
-                .map_err(|_| ApiError::Internal("internal error".to_owned()))?;
+            auth.dummy_verify(password).await?;
             false
         }
     };
@@ -96,6 +101,7 @@ async fn login(
     };
 
     limiter.reset(&key);
+    ip_limiter.refund(&ip);
     let session = state.auth.create_session(user.id)?;
     let info = SessionInfo {
         username: user.username,

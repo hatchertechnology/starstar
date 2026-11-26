@@ -5,7 +5,9 @@
 //! calls `*_in(conn: &Connection, ...)` helpers. A helper never locks, so no
 //! method can deadlock itself, and nothing is held across an `.await`.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use tokio::sync::Semaphore;
 
 use rusqlite::{TransactionBehavior, params};
 
@@ -63,6 +65,13 @@ impl From<rusqlite::Error> for GrantError {
     }
 }
 
+/// 4 permits, or the number of CPUs when that is smaller.
+fn argon_permit_count() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(4)
+}
+
 /// Users, sessions, OAuth clients, grants and tokens.
 pub struct AuthStore {
     pub(crate) db: Db,
@@ -70,6 +79,8 @@ pub struct AuthStore {
     pub(crate) hasher: Hasher,
     setup_code: Mutex<Option<String>>,
     login_limiter: RateLimiter,
+    login_ip_limiter: RateLimiter,
+    argon_permits: Arc<Semaphore>,
     setup_limiter: RateLimiter,
     register_limiter: RateLimiter,
     token_limiter: RateLimiter,
@@ -84,6 +95,8 @@ impl AuthStore {
             hasher,
             setup_code: Mutex::new(None),
             login_limiter: RateLimiter::new(5, 900),
+            login_ip_limiter: RateLimiter::new(30, 900),
+            argon_permits: Arc::new(Semaphore::new(argon_permit_count())),
             setup_limiter: RateLimiter::new(5, 900),
             register_limiter: RateLimiter::new(20, 3600),
             token_limiter: RateLimiter::new(20, 900),
@@ -101,6 +114,62 @@ impl AuthStore {
     /// 5 failed sign-ins per (username, IP) per 900 s.
     pub fn login_limiter(&self) -> &RateLimiter {
         &self.login_limiter
+    }
+
+    /// A coarse limit of 30 sign-in attempts per client IP per 900 s, so
+    /// rotating usernames does not escape the per-user limit. Successful
+    /// sign-ins are refunded.
+    pub fn login_ip_limiter(&self) -> &RateLimiter {
+        &self.login_ip_limiter
+    }
+
+    /// The global bound on concurrent argon2 runs. Use [`AuthStore::hash_password`],
+    /// [`AuthStore::verify_password`] and [`AuthStore::dummy_verify`] instead of
+    /// calling the hasher directly.
+    pub fn argon_semaphore(&self) -> Arc<Semaphore> {
+        self.argon_permits.clone()
+    }
+
+    async fn with_argon_permit<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(Hasher) -> T + Send + 'static,
+    ) -> Result<T, AuthStoreError> {
+        let permit = self
+            .argon_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AuthStoreError::Corrupt("argon2 limiter closed".to_owned()))?;
+        let hasher = self.hasher;
+        let result = tokio::task::spawn_blocking(move || {
+            let out = work(hasher);
+            drop(permit);
+            out
+        })
+        .await
+        .map_err(|_| AuthStoreError::Corrupt("argon2 task failed".to_owned()))?;
+        Ok(result)
+    }
+
+    /// Hashes `password` on the blocking pool, holding a global argon2 permit.
+    pub async fn hash_password(&self, password: String) -> Result<String, AuthStoreError> {
+        self.with_argon_permit(move |h| h.hash(&password)).await
+    }
+
+    /// Verifies `password` against `phc`, holding a global argon2 permit.
+    pub async fn verify_password(
+        &self,
+        password: String,
+        phc: String,
+    ) -> Result<bool, AuthStoreError> {
+        self.with_argon_permit(move |h| h.verify(&password, &phc))
+            .await
+    }
+
+    /// The timing-equalising verify for unknown users, under the same permits.
+    pub async fn dummy_verify(&self, password: String) -> Result<(), AuthStoreError> {
+        self.with_argon_permit(move |h| h.dummy_verify(&password))
+            .await
     }
 
     /// 5 failed setup attempts per client IP per 900 s.
@@ -159,6 +228,7 @@ impl AuthStore {
         self.prune_pending();
         for limiter in [
             &self.login_limiter,
+            &self.login_ip_limiter,
             &self.setup_limiter,
             &self.register_limiter,
             &self.token_limiter,

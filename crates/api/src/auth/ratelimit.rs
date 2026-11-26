@@ -60,6 +60,17 @@ impl RateLimiter {
         true
     }
 
+    /// Gives back one reserved attempt (the request turned out not to count).
+    pub fn refund(&self, key: &str) {
+        let mut map = self.map();
+        if let Some(entry) = map.get_mut(key) {
+            entry.0 = entry.0.saturating_sub(1);
+            if entry.0 == 0 {
+                map.remove(key);
+            }
+        }
+    }
+
     /// Counts a hit regardless of outcome and reports whether it is allowed.
     /// Used for limits that count every request (client registration).
     pub fn hit(&self, key: &str, now: i64) -> bool {
@@ -131,6 +142,17 @@ mod tests {
         assert_eq!(allowed, 5);
         l.reset("k");
         assert!(l.try_begin("k", 1));
+    }
+
+    #[test]
+    fn refund_gives_back_one_attempt() {
+        let l = RateLimiter::new(2, 100);
+        assert!(l.try_begin("k", 0));
+        assert!(l.try_begin("k", 0));
+        l.refund("k");
+        assert!(l.try_begin("k", 0));
+        assert!(!l.try_begin("k", 0));
+        l.refund("absent");
     }
 
     #[test]

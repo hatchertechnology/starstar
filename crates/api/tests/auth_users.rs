@@ -244,3 +244,30 @@ async fn concurrent_wrong_current_passwords_are_limited_to_five_evaluations() {
     }
     assert!(evaluated <= 5, "{evaluated} guesses were evaluated");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn user_creation_and_password_change_wait_for_an_argon2_permit() {
+    let (app, state) = test_app();
+    let admin = token_for(&state, "boss", Role::Admin);
+    let sem = state.auth.argon_semaphore();
+    let n = sem.available_permits() as u32;
+    let held = sem.acquire_many_owned(n).await.unwrap();
+    let task = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let req = Request::post("/api/users")
+                .header("authorization", format!("Bearer {admin}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"username": "newbie", "password": "pw-newbie-123", "role": "viewer"})
+                        .to_string(),
+                ))
+                .unwrap();
+            send(&app, req).await.status.as_u16()
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(!task.is_finished());
+    drop(held);
+    assert_eq!(task.await.unwrap(), 201);
+}

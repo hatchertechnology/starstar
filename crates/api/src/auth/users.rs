@@ -11,7 +11,7 @@ use starstar_shared::auth::{
 
 use super::client_ip::client_ip;
 use super::cookies::get_cookie;
-use super::password::validate_password;
+use super::password::{MAX_PASSWORD_CHARS, validate_password};
 use super::session::limiter_key;
 use super::setup::USERNAME_RULES;
 use super::{Admin, Viewer};
@@ -36,13 +36,6 @@ async fn me(Viewer(caller): Viewer) -> Json<WhoAmI> {
     })
 }
 
-async fn hash_blocking(state: &AppState, password: String) -> Result<String, ApiError> {
-    let hasher = state.auth.hasher();
-    tokio::task::spawn_blocking(move || hasher.hash(&password))
-        .await
-        .map_err(|_| ApiError::Internal("internal error".to_owned()))
-}
-
 async fn list_users(
     State(state): State<AppState>,
     _admin: Admin,
@@ -60,7 +53,7 @@ async fn create_user(
         return Err(ApiError::BadRequest(USERNAME_RULES.to_owned()));
     }
     validate_password(&req.password)?;
-    let hash = hash_blocking(&state, req.password).await?;
+    let hash = state.auth.hash_password(req.password).await?;
     let user = state.auth.create_user(&req.username, &hash, req.role)?;
     Ok((StatusCode::CREATED, Json(user.summary())))
 }
@@ -110,12 +103,10 @@ async fn change_password(
             "too many failed attempts, try again later".to_owned(),
         ));
     }
-    let hasher = auth.hasher();
-    let current = req.current_password;
-    let hash = user.password_hash.clone();
-    let ok = tokio::task::spawn_blocking(move || hasher.verify(&current, &hash))
-        .await
-        .map_err(|_| ApiError::Internal("internal error".to_owned()))?;
+    let ok = req.current_password.chars().count() <= MAX_PASSWORD_CHARS
+        && auth
+            .verify_password(req.current_password, user.password_hash.clone())
+            .await?;
     if !ok {
         return Err(ApiError::Forbidden(
             "current password is incorrect".to_owned(),
@@ -124,7 +115,7 @@ async fn change_password(
     auth.login_limiter().reset(&key);
 
     validate_password(&req.new_password)?;
-    let new_hash = hash_blocking(&state, req.new_password).await?;
+    let new_hash = auth.hash_password(req.new_password).await?;
     auth.set_password(user.id, &new_hash)?;
     // Everything else signed in as this user must sign in again, and every
     // connected app is revoked.

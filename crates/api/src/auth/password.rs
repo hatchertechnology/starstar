@@ -82,9 +82,13 @@ impl Hasher {
     }
 }
 
+/// The longest password accepted, in characters. Longer input is refused
+/// before any argon2 run.
+pub const MAX_PASSWORD_CHARS: usize = 256;
+
 /// Passwords are 8 to 256 characters.
 pub fn validate_password(password: &str) -> Result<(), ApiError> {
-    if (8..=256).contains(&password.chars().count()) {
+    if (8..=MAX_PASSWORD_CHARS).contains(&password.chars().count()) {
         Ok(())
     } else {
         Err(ApiError::BadRequest(

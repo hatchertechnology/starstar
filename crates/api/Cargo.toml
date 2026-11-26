@@ -22,7 +22,7 @@ sha2.workspace = true
 starstar-shared.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "sync"] }
 url.workspace = true
 
 [dev-dependencies]

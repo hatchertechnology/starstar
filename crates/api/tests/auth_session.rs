@@ -234,3 +234,85 @@ async fn concurrent_bad_logins_are_limited_to_five_evaluations() {
     assert!(unauthorized <= 5, "{unauthorized} guesses were evaluated");
     assert_eq!(unauthorized + limited, 50);
 }
+
+/// Holds every argon2 permit, so any request that needs argon2 must wait.
+async fn hold_all_permits(state: &starstar_api::AppState) -> tokio::sync::OwnedSemaphorePermit {
+    let sem = state.auth.argon_semaphore();
+    let n = sem.available_permits();
+    assert!((1..=4).contains(&n), "{n} permits");
+    sem.acquire_many_owned(n as u32).await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn argon2_work_waits_for_a_global_permit() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let held = hold_all_permits(&state).await;
+    let task = {
+        let app = app.clone();
+        tokio::spawn(async move { post_login(&app, "kerry", "pw-kerry-123").await.status })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(!task.is_finished(), "login ran argon2 without a permit");
+    drop(held);
+    assert_eq!(task.await.unwrap(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unknown_users_also_wait_for_a_permit() {
+    let (app, state) = test_app();
+    let held = hold_all_permits(&state).await;
+    let task = {
+        let app = app.clone();
+        tokio::spawn(async move { post_login(&app, "ghost", "whatever-pw").await.status })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(!task.is_finished());
+    drop(held);
+    assert_eq!(task.await.unwrap(), 401);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn overlong_passwords_are_refused_before_any_argon2_work() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let _held = hold_all_permits(&state).await;
+    let long = "x".repeat(257);
+    let r = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        post_login(&app, "kerry", &long),
+    )
+    .await
+    .expect("must not wait for argon2");
+    assert_eq!(r.status, 401);
+    let ok = "x".repeat(256);
+    let r = tokio::time::timeout(
+        std::time::Duration::from_millis(150),
+        post_login(&app, "kerry", &ok),
+    )
+    .await;
+    assert!(r.is_err(), "a 256-char password does need argon2");
+}
+
+#[tokio::test]
+async fn per_ip_login_limiter_stops_username_rotation() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    for i in 0..30 {
+        let r = post_login(&app, &format!("ghost{i}"), "whatever-pw").await;
+        assert_eq!(r.status, 401, "attempt {i}");
+    }
+    let r = post_login(&app, "kerry", "pw-kerry-123").await;
+    assert_eq!(r.status, 429);
+    state.auth.clock().advance(901);
+    assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
+}
+
+#[tokio::test]
+async fn successful_logins_do_not_use_up_the_per_ip_budget() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    for _ in 0..40 {
+        assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
+    }
+}

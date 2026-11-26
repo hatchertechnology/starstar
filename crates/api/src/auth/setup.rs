@@ -49,11 +49,7 @@ async fn setup(
     }
     validate_password(&req.password)?;
 
-    let hasher = auth.hasher();
-    let password = req.password;
-    let hash = tokio::task::spawn_blocking(move || hasher.hash(&password))
-        .await
-        .map_err(|_| ApiError::Internal("internal error".to_owned()))?;
+    let hash = auth.hash_password(req.password).await?;
     let user = auth.create_first_admin(&req.username, &hash)?;
 
     auth.set_setup_code(None);

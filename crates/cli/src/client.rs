@@ -151,6 +151,8 @@ impl ApiClient {
                     return self.finish(resp);
                 }
                 Err(e) => {
+                    // `send` fails only when no response status arrived. An answer, even
+                    // an error status, comes back as `Ok` and is never resent.
                     if retry_transport
                         && !retried
                         && let (Some(src), Some(t)) = (&self.tokens, &token)

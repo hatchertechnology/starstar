@@ -300,3 +300,71 @@ fn upload_too_large_is_reported() {
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("512 MB limit"), "{}", out.stderr);
 }
+
+fn puts(fake: &FakeApi) -> Vec<Recorded> {
+    fake.requests()
+        .into_iter()
+        .filter(|r| r.method == "PUT")
+        .collect()
+}
+
+#[test]
+fn upload_retries_once_after_a_dropped_connection() {
+    let fake = FakeApi::start();
+    let front = Front::start(fake.addr, FirstConn::Drop);
+    let h = tempfile::tempdir().unwrap();
+    fake.add_refresh_token("ss_rt_1");
+    write_credentials_for(
+        h.path(),
+        &front.url,
+        stored(&fake, TOKEN, "ss_rt_1", future()),
+    );
+    let data = pattern(2 * 1024 * 1024);
+    let file = h.path().join("a.bgcode");
+    std::fs::write(&file, &data).unwrap();
+    let out = run(cli(&fake, h.path())
+        .env("STARSTAR_API_URL", &front.url)
+        .args(["files", "upload", "mk4", "usb"])
+        .arg(&file));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    // One PUT died on the wire, one reached the API; one refresh in between.
+    assert_eq!(front.sabotaged_puts(), 1);
+    assert_eq!(fake.refresh_count(), 1);
+    let got = puts(&fake);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].header("authorization"), Some("Bearer ss_at_r1"));
+    assert_eq!(got[0].body, data);
+}
+
+#[test]
+fn upload_does_not_retry_when_the_server_already_answered() {
+    let fake = FakeApi::start();
+    let body = br#"{"error":"upload is larger than the 512 MB limit"}"#;
+    let reply = format!(
+        "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        String::from_utf8_lossy(body)
+    );
+    let front = Front::start(fake.addr, FirstConn::Reply(reply.into_bytes()));
+    let h = tempfile::tempdir().unwrap();
+    fake.add_refresh_token("ss_rt_1");
+    write_credentials_for(
+        h.path(),
+        &front.url,
+        stored(&fake, TOKEN, "ss_rt_1", future()),
+    );
+    let file = h.path().join("big.bgcode");
+    std::fs::write(&file, pattern(8 * 1024 * 1024)).unwrap();
+    let out = run(cli(&fake, h.path())
+        .env("STARSTAR_API_URL", &front.url)
+        .args(["files", "upload", "mk4", "usb"])
+        .arg(&file));
+    assert_eq!(out.code, 1, "{}", out.stderr);
+    assert!(out.stderr.contains("512 MB limit"), "{}", out.stderr);
+    assert_eq!(front.sabotaged_puts(), 1);
+    assert!(
+        puts(&fake).is_empty(),
+        "the file was streamed a second time"
+    );
+    assert_eq!(fake.refresh_count(), 0);
+}

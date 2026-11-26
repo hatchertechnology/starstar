@@ -814,3 +814,96 @@ pub fn code_from_page(html: &str) -> String {
     let end = html[start..].find("</code>").unwrap() + start;
     html[start..end].to_owned()
 }
+
+// ---- a flaky front for the fake ----
+
+/// What the front does with the first connection it accepts.
+pub enum FirstConn {
+    /// Read the request head, then close without answering.
+    Drop,
+    /// Read the request head, send these raw bytes, drain the body and close.
+    Reply(Vec<u8>),
+}
+
+/// A TCP front for a [`FakeApi`]: the first connection is sabotaged, every
+/// later one is piped through to the fake untouched.
+pub struct Front {
+    pub url: String,
+    sabotaged_puts: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Front {
+    pub fn start(upstream: SocketAddr, first: FirstConn) -> Self {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener, TcpStream};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        fn head(s: &mut TcpStream) -> Vec<u8> {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            buf
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let sabotaged_puts = Arc::new(AtomicUsize::new(0));
+        let counter = sabotaged_puts.clone();
+        std::thread::spawn(move || {
+            let mut first = Some(first);
+            for conn in listener.incoming() {
+                let Ok(mut client) = conn else { return };
+                let mode = first.take();
+                let counter = counter.clone();
+                std::thread::spawn(move || {
+                    let buf = head(&mut client);
+                    match mode {
+                        Some(mode) => {
+                            if buf.starts_with(b"PUT ") {
+                                counter.fetch_add(1, Ordering::SeqCst);
+                            }
+                            if let FirstConn::Reply(bytes) = mode {
+                                let _ = client.write_all(&bytes);
+                                let _ = client.flush();
+                                // Like a real server, read the rest of the body before
+                                // closing, so the answer is not lost to a reset.
+                                let mut sink = [0u8; 65536];
+                                while matches!(client.read(&mut sink), Ok(n) if n > 0) {}
+                            }
+                            let _ = client.shutdown(Shutdown::Both);
+                        }
+                        None => {
+                            let Ok(mut up) = TcpStream::connect(upstream) else {
+                                return;
+                            };
+                            let _ = up.write_all(&buf);
+                            let (mut c2, mut u2) =
+                                (client.try_clone().unwrap(), up.try_clone().unwrap());
+                            std::thread::spawn(move || {
+                                let _ = std::io::copy(&mut c2, &mut u2);
+                                let _ = u2.shutdown(Shutdown::Write);
+                            });
+                            let _ = std::io::copy(&mut up, &mut client);
+                            let _ = client.shutdown(Shutdown::Write);
+                        }
+                    }
+                });
+            }
+        });
+        Self {
+            url,
+            sabotaged_puts,
+        }
+    }
+
+    /// PUT requests the front swallowed or answered itself.
+    pub fn sabotaged_puts(&self) -> usize {
+        self.sabotaged_puts
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}

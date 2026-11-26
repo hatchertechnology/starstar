@@ -43,3 +43,131 @@ pub(crate) fn tool_role(name: &str) -> Option<Role> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+pub(crate) const TOOL_NAMES: &[&str] = &[
+    "list_printers",
+    "get_printer",
+    "register_printer",
+    "remove_printer",
+    "printer_info",
+    "printer_status",
+    "list_storage",
+    "get_job",
+    "pause_job",
+    "resume_job",
+    "continue_job",
+    "stop_job",
+    "get_transfer",
+    "cancel_transfer",
+    "list_files",
+    "file_state",
+    "upload_file",
+    "start_print",
+    "delete_file",
+    "list_cameras",
+    "get_camera",
+    "camera_snapshot",
+    "take_snapshot",
+    "order_cameras",
+    "register_camera",
+    "remove_camera",
+    "configure_camera",
+    "reset_camera_config",
+    "connect_camera",
+    "disconnect_camera",
+    "check_update",
+    "apply_update",
+];
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::mcp::tools::all_tools;
+
+    #[test]
+    fn every_routed_tool_has_a_role_and_vice_versa() {
+        let routed: BTreeSet<String> = all_tools()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let named: BTreeSet<String> = TOOL_NAMES.iter().map(|n| (*n).to_owned()).collect();
+        assert_eq!(routed, named);
+        assert_eq!(TOOL_NAMES.len(), 32);
+        for name in TOOL_NAMES {
+            assert!(tool_role(name).is_some(), "{name} has no role");
+        }
+        assert_eq!(tool_role("nope"), None);
+    }
+
+    /// (name, read_only, destructive, idempotent) copied from the plan's tool table.
+    const ANNOTATIONS: &[(&str, bool, bool, Option<bool>)] = &[
+        ("list_printers", true, false, None),
+        ("get_printer", true, false, None),
+        ("register_printer", false, false, None),
+        ("remove_printer", false, true, None),
+        ("printer_info", true, false, None),
+        ("printer_status", true, false, None),
+        ("list_storage", true, false, None),
+        ("get_job", true, false, None),
+        ("pause_job", false, false, Some(true)),
+        ("resume_job", false, false, Some(true)),
+        ("continue_job", false, false, None),
+        ("stop_job", false, true, None),
+        ("get_transfer", true, false, None),
+        ("cancel_transfer", false, true, None),
+        ("list_files", true, false, None),
+        ("file_state", true, false, None),
+        ("upload_file", false, true, None),
+        ("start_print", false, false, None),
+        ("delete_file", false, true, None),
+        ("list_cameras", true, false, None),
+        ("get_camera", true, false, None),
+        ("camera_snapshot", true, false, None),
+        ("take_snapshot", false, false, None),
+        ("order_cameras", false, false, Some(true)),
+        ("register_camera", false, false, None),
+        ("remove_camera", false, true, None),
+        ("configure_camera", false, false, Some(true)),
+        ("reset_camera_config", false, true, None),
+        ("connect_camera", false, false, None),
+        ("disconnect_camera", false, false, None),
+        ("check_update", true, false, None),
+        ("apply_update", false, true, None),
+    ];
+
+    #[test]
+    fn annotations_match_the_tool_table() {
+        let tools = all_tools().list_all();
+        assert_eq!(ANNOTATIONS.len(), tools.len());
+        for (name, read_only, destructive, idempotent) in ANNOTATIONS {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == *name)
+                .unwrap_or_else(|| panic!("{name} is not routed"));
+            let a = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} has no annotations"));
+            assert_eq!(a.read_only_hint, Some(*read_only), "{name} read_only");
+            if !read_only {
+                assert_eq!(a.destructive_hint, Some(*destructive), "{name} destructive");
+            }
+            assert_eq!(a.idempotent_hint, *idempotent, "{name} idempotent");
+        }
+    }
+
+    #[test]
+    fn roles_match_the_printer_consts() {
+        use crate::printers::{cameras, files, jobs};
+        assert_eq!(tool_role("pause_job"), Some(jobs::PAUSE_JOB_ROLE));
+        assert_eq!(tool_role("delete_file"), Some(files::DELETE_FILE_ROLE));
+        assert_eq!(
+            tool_role("take_snapshot"),
+            Some(cameras::TAKE_SNAPSHOT_ROLE)
+        );
+    }
+}

@@ -4,6 +4,8 @@ mod mcp_support;
 
 use axum::body::Body;
 use axum::http::Method;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as STANDARD_B64;
 use fake_prusalink::TestApi;
 use mcp_support::*;
 use serde_json::json;
@@ -241,4 +243,180 @@ async fn origin_must_match_public_url_or_loopback() {
     assert_eq!(send(Some("https://print.example.com")).await, 200);
     assert_eq!(send(Some("http://localhost:3000")).await, 200);
     assert_eq!(send(None).await, 200);
+}
+
+fn names(list: &[&str]) -> std::collections::BTreeSet<String> {
+    list.iter().map(|s| (*s).to_owned()).collect()
+}
+
+const VIEWER_TOOLS: &[&str] = &[
+    "list_printers",
+    "get_printer",
+    "printer_info",
+    "printer_status",
+    "list_storage",
+    "get_job",
+    "get_transfer",
+    "list_files",
+    "file_state",
+    "list_cameras",
+    "get_camera",
+    "camera_snapshot",
+];
+const OPERATOR_TOOLS: &[&str] = &[
+    "pause_job",
+    "resume_job",
+    "continue_job",
+    "stop_job",
+    "cancel_transfer",
+    "upload_file",
+    "start_print",
+    "take_snapshot",
+];
+const ADMIN_TOOLS: &[&str] = &[
+    "register_printer",
+    "remove_printer",
+    "delete_file",
+    "order_cameras",
+    "register_camera",
+    "remove_camera",
+    "configure_camera",
+    "reset_camera_config",
+    "connect_camera",
+    "disconnect_camera",
+    "check_update",
+    "apply_update",
+];
+
+#[tokio::test]
+async fn tools_list_per_role() {
+    let api = TestApi::start().await;
+    let listed = |role| {
+        let api = &api;
+        async move {
+            let t = token(api, role);
+            list_tools(api, &t)
+                .await
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        }
+    };
+    let viewer = names(VIEWER_TOOLS);
+    let operator: Vec<&str> = [VIEWER_TOOLS, OPERATOR_TOOLS].concat();
+    let admin: Vec<&str> = [VIEWER_TOOLS, OPERATOR_TOOLS, ADMIN_TOOLS].concat();
+    assert_eq!(listed(Role::Viewer).await, viewer);
+    assert_eq!(listed(Role::Operator).await, names(&operator));
+    let all = listed(Role::Admin).await;
+    assert_eq!(all, names(&admin));
+    assert_eq!(all.len(), 32);
+
+    let t = token(&api, Role::Operator);
+    let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
+    let msg = rpc_result(&r);
+    let stop = msg["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "stop_job")
+        .unwrap();
+    assert_eq!(stop["annotations"]["readOnlyHint"], false);
+    assert_eq!(stop["annotations"]["destructiveHint"], true);
+}
+
+#[tokio::test]
+async fn every_tool_rejects_the_role_below_it() {
+    let api = TestApi::start().await;
+    let up = STANDARD_B64.encode(b"abc");
+    let cases: Vec<(&str, serde_json::Value, Role)> = {
+        let p = |extra: serde_json::Value| {
+            let mut v = json!({"printer": "mk4"});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let f = json!({"storage": "usb", "path": "a.bgcode"});
+        let cam = json!({"id": "cam1"});
+        vec![
+            ("pause_job", p(json!({"id": 42})), Role::Viewer),
+            ("resume_job", p(json!({"id": 42})), Role::Viewer),
+            ("continue_job", p(json!({"id": 42})), Role::Viewer),
+            ("stop_job", p(json!({"id": 42})), Role::Viewer),
+            ("cancel_transfer", p(json!({"id": 7})), Role::Viewer),
+            (
+                "upload_file",
+                p(json!({"storage": "usb", "path": "a.bgcode", "content_base64": up})),
+                Role::Viewer,
+            ),
+            ("start_print", p(f.clone()), Role::Viewer),
+            ("take_snapshot", p(cam.clone()), Role::Viewer),
+            (
+                "register_printer",
+                json!({"name": "x", "kind": "mk4", "host": "127.0.0.1:1", "username": "u", "password": "p"}),
+                Role::Operator,
+            ),
+            ("remove_printer", p(json!({})), Role::Operator),
+            ("delete_file", p(f), Role::Operator),
+            ("order_cameras", p(json!({"ids": ["cam1"]})), Role::Operator),
+            ("register_camera", p(cam.clone()), Role::Operator),
+            ("remove_camera", p(cam.clone()), Role::Operator),
+            ("configure_camera", p(cam.clone()), Role::Operator),
+            ("reset_camera_config", p(cam.clone()), Role::Operator),
+            ("connect_camera", p(cam.clone()), Role::Operator),
+            ("disconnect_camera", p(cam), Role::Operator),
+            ("check_update", p(json!({})), Role::Operator),
+            ("apply_update", p(json!({})), Role::Operator),
+        ]
+    };
+    assert_eq!(cases.len(), OPERATOR_TOOLS.len() + ADMIN_TOOLS.len());
+    for (tool, args, lower) in cases {
+        let t = token(&api, lower);
+        let res = call_tool(&api, &t, tool, args).await;
+        assert_eq!(res["isError"], true, "{tool}: {res}");
+        assert_eq!(res["structuredContent"]["status"], 403, "{tool}: {res}");
+    }
+    assert!(api.fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn hidden_tool_called_by_name_is_forbidden_not_unknown() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Viewer);
+    let msg = call_tool_raw(&api, &t, "apply_update", json!({"printer": "mk4"})).await;
+    assert!(msg.get("error").is_none(), "{msg}");
+    assert_eq!(msg["result"]["isError"], true);
+    assert_eq!(msg["result"]["structuredContent"]["status"], 403);
+}
+
+#[tokio::test]
+async fn demoted_caller_loses_tools_on_next_request() {
+    let api = TestApi::start().await;
+    let t = common::token_for(&api.state, "op", Role::Operator);
+    assert!(list_tools(&api, &t).await.contains(&"pause_job".to_owned()));
+    let res = call_tool(&api, &t, "pause_job", json!({"printer": "mk4", "id": 42})).await;
+    assert_eq!(res["isError"], false, "{res}");
+
+    api.state
+        .auth
+        .update_user("op", Some(Role::Viewer), None)
+        .unwrap();
+    assert!(!list_tools(&api, &t).await.contains(&"pause_job".to_owned()));
+    let res = call_tool(&api, &t, "pause_job", json!({"printer": "mk4", "id": 42})).await;
+    assert_eq!(res["structuredContent"]["status"], 403);
+}
+
+#[tokio::test]
+async fn disabled_user_gets_401_on_next_mcp_request() {
+    let api = TestApi::start().await;
+    common::create_user(&api.state, "boss", "pw", Role::Admin);
+    let t = common::token_for(&api.state, "v", Role::Viewer);
+    let res = call_tool(&api, &t, "printer_status", json!({"printer": "mk4"})).await;
+    assert_eq!(res["isError"], false);
+    api.state.auth.update_user("v", None, Some(true)).unwrap();
+    let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
+    assert_eq!(r.status, 401);
+    assert_eq!(
+        r.headers["www-authenticate"],
+        r#"Bearer error="invalid_token", resource_metadata="http://127.0.0.1:8080/.well-known/oauth-protected-resource/mcp""#
+    );
 }

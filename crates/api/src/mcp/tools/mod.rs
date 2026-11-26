@@ -5,8 +5,9 @@ use rmcp::handler::server::router::tool::ToolRouter;
 
 use super::StarstarMcp;
 
+mod jobs;
 mod printers;
 
 pub(crate) fn all_tools() -> ToolRouter<StarstarMcp> {
-    StarstarMcp::printer_tools()
+    StarstarMcp::printer_tools() + StarstarMcp::job_tools()
 }

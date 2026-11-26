@@ -11,3 +11,13 @@ pub struct PrinterArgs {
     /// Name of the registered printer, as shown by list_printers.
     pub printer: String,
 }
+
+/// Arguments of the job and transfer control tools.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct IdArgs {
+    /// Name of the registered printer, as shown by list_printers.
+    pub printer: String,
+    /// Id of the job or transfer. Omit it to act on the one that is running now.
+    pub id: Option<u64>,
+}

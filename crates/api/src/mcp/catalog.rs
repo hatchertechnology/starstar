@@ -4,13 +4,22 @@
 
 use starstar_shared::Role;
 
-use crate::printers::registry::LIST_PRINTERS_ROLE;
-use crate::printers::telemetry::PRINTER_STATUS_ROLE;
+use crate::printers::{jobs, registry, telemetry, transfer};
 
 pub(crate) fn tool_role(name: &str) -> Option<Role> {
     Some(match name {
-        "list_printers" => LIST_PRINTERS_ROLE,
-        "printer_status" => PRINTER_STATUS_ROLE,
+        "list_printers" => registry::LIST_PRINTERS_ROLE,
+        "get_printer" => registry::SHOW_PRINTER_ROLE,
+        "printer_info" => telemetry::PRINTER_INFO_ROLE,
+        "printer_status" => telemetry::PRINTER_STATUS_ROLE,
+        "list_storage" => telemetry::PRINTER_STORAGE_ROLE,
+        "get_job" => jobs::CURRENT_JOB_ROLE,
+        "pause_job" => jobs::PAUSE_JOB_ROLE,
+        "resume_job" => jobs::RESUME_JOB_ROLE,
+        "continue_job" => jobs::CONTINUE_JOB_ROLE,
+        "stop_job" => jobs::STOP_JOB_ROLE,
+        "get_transfer" => transfer::CURRENT_TRANSFER_ROLE,
+        "cancel_transfer" => transfer::CANCEL_TRANSFER_ROLE,
         _ => return None,
     })
 }

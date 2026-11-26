@@ -54,6 +54,23 @@ pub(crate) fn structured_ok(key: &str, value: impl Serialize) -> CallToolResult 
     }
 }
 
+/// A successful result that is one sentence.
+pub(crate) fn text_ok(text: impl Into<String>) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::text(text)])
+}
+
+/// Unwraps a `Result<_, ApiError>` inside a tool, returning the tool error
+/// as the tool's result.
+macro_rules! tool_try {
+    ($e:expr) => {
+        match $e {
+            Ok(value) => value,
+            Err(err) => return Ok($crate::mcp::results::tool_error(err)),
+        }
+    };
+}
+pub(crate) use tool_try;
+
 /// Maps an operation's result to a tool result.
 pub(crate) fn outcome<T>(
     result: Result<T, ApiError>,

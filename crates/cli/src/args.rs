@@ -1,7 +1,7 @@
 //! Command-line arguments.
 
 use clap::{Parser, Subcommand};
-use starstar_shared::{APP_NAME, DEFAULT_API_URL};
+use starstar_shared::{APP_NAME, DEFAULT_API_URL, Role};
 
 /// Manage 3D printers through the starstar API.
 #[derive(Debug, Parser)]
@@ -23,6 +23,32 @@ pub struct Cli {
 pub enum Command {
     /// Check that the API is reachable.
     Status,
+    /// Sign in with your browser. On a machine without a browser, use --no-browser.
+    Login {
+        /// Print a URL and ask for the code it shows, instead of opening a browser.
+        /// Use this on a machine without a browser.
+        #[arg(long)]
+        no_browser: bool,
+        /// Highest role this sign-in may use: viewer, operator or admin.
+        #[arg(long, default_value = "operator", value_parser = |s: &str| s.parse::<Role>())]
+        role: Role,
+    },
+    /// Sign out and revoke this sign-in on the server.
+    Logout,
+    /// Show who you are signed in as.
+    Whoami,
+    /// Create the first admin account with the setup code the API printed.
+    Setup {
+        /// Username for the new admin.
+        #[arg(long)]
+        username: String,
+        /// Read the setup code from stdin (one line) instead of prompting.
+        #[arg(long)]
+        setup_code_stdin: bool,
+        /// Read the password from stdin (one line, after the setup code) instead of prompting.
+        #[arg(long)]
+        password_stdin: bool,
+    },
     /// List and inspect printers.
     #[command(subcommand)]
     Printer(PrinterCommand),

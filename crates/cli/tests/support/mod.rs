@@ -16,6 +16,7 @@ use axum::http::{Request, Response};
 use serde::Serialize;
 use serde_json::json;
 use starstar_cli::credentials::{CredentialStore, StoredToken, server_key};
+use starstar_cli::oauth::Pkce;
 use starstar_shared::auth::{TokenResponse, WhoAmI};
 use starstar_shared::{
     Health, PrinterInfo, PrinterKind, PrinterStatus, PrinterSummary, Role, StorageDevice,
@@ -83,6 +84,18 @@ struct State_ {
     refresh_count: usize,
     counter: usize,
     refresh_delay: Duration,
+    codes: HashMap<String, CodeInfo>,
+    authorizations: Vec<(String, String, String)>,
+    deny_next: bool,
+    grants: usize,
+    revoked: Vec<String>,
+}
+
+struct CodeInfo {
+    challenge: String,
+    redirect_uri: String,
+    scope: String,
+    used: bool,
 }
 
 struct Shared {
@@ -169,6 +182,19 @@ impl FakeApi {
 
     pub fn refresh_count(&self) -> usize {
         self.shared.state.lock().unwrap().refresh_count
+    }
+
+    pub fn deny_next(&self) {
+        self.shared.state.lock().unwrap().deny_next = true;
+    }
+
+    /// `(challenge, redirect_uri, scope)` of every authorization request.
+    pub fn authorizations(&self) -> Vec<(String, String, String)> {
+        self.shared.state.lock().unwrap().authorizations.clone()
+    }
+
+    pub fn revoked(&self) -> Vec<String> {
+        self.shared.state.lock().unwrap().revoked.clone()
     }
 
     pub fn requests(&self) -> Vec<Recorded> {
@@ -298,13 +324,132 @@ fn oauth(sh: &Shared, st: &mut State_, rec: &Recorded, path: &str) -> Option<(Ca
                     };
                     Some((Canned::json(200, body), st.refresh_delay))
                 }
+                Some("authorization_code") => {
+                    let bad = || {
+                        Some((
+                            Canned::json(400, json!({"error": "invalid_grant"})),
+                            Duration::ZERO,
+                        ))
+                    };
+                    let code = f.get("code").cloned().unwrap_or_default();
+                    let Some(info) = st.codes.get_mut(&code) else {
+                        return bad();
+                    };
+                    let verifier = f.get("code_verifier").cloned().unwrap_or_default();
+                    if info.used
+                        || f.get("redirect_uri") != Some(&info.redirect_uri)
+                        || f.get("client_id").map(String::as_str) != Some("starstar-cli")
+                        || Pkce::from_verifier(&verifier).challenge != info.challenge
+                    {
+                        return bad();
+                    }
+                    info.used = true;
+                    let scope = info.scope.clone();
+                    st.grants += 1;
+                    let n = st.grants;
+                    let (at, rt) = (format!("ss_at_c{n}"), format!("ss_rt_c{n}"));
+                    st.accepted.insert(at.clone());
+                    st.live_refresh.insert(rt.clone());
+                    let body = TokenResponse {
+                        access_token: at,
+                        token_type: "Bearer".into(),
+                        expires_in: 3600,
+                        refresh_token: rt,
+                        scope,
+                    };
+                    Some((Canned::json(200, body), Duration::ZERO))
+                }
                 _ => None,
             }
         }
-        _ => {
-            let _ = sh;
-            None
+        ("POST", "/oauth/revoke") => {
+            let token = form(rec).get("token").cloned().unwrap_or_default();
+            st.live_refresh.remove(&token);
+            st.revoked.push(token);
+            Some((Canned::empty(200), Duration::ZERO))
         }
+        ("GET", "/.well-known/oauth-authorization-server") => {
+            let u = &sh.url;
+            Some((
+                Canned::json(
+                    200,
+                    json!({
+                        "issuer": u,
+                        "authorization_endpoint": format!("{u}/oauth/authorize"),
+                        "token_endpoint": format!("{u}/oauth/token"),
+                        "revocation_endpoint": format!("{u}/oauth/revoke"),
+                    }),
+                ),
+                Duration::ZERO,
+            ))
+        }
+        ("GET", "/oauth/authorize") => {
+            let q: HashMap<String, String> = rec
+                .uri
+                .split_once('?')
+                .map(|(_, q)| {
+                    url::form_urlencoded::parse(q.as_bytes())
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let get = |k: &str| q.get(k).cloned().unwrap_or_default();
+            if get("client_id") != "starstar-cli" || get("code_challenge_method") != "S256" {
+                return Some((
+                    Canned::json(400, json!({"error": "invalid_request"})),
+                    Duration::ZERO,
+                ));
+            }
+            let redirect = get("redirect_uri");
+            st.authorizations
+                .push((get("code_challenge"), redirect.clone(), get("scope")));
+            let mut loc = url::Url::parse(&redirect).unwrap();
+            if st.deny_next {
+                st.deny_next = false;
+                loc.query_pairs_mut()
+                    .append_pair("error", "access_denied")
+                    .append_pair("state", &get("state"));
+            } else {
+                st.counter += 1;
+                let code = format!("ss_ac_{}", st.counter);
+                st.codes.insert(
+                    code.clone(),
+                    CodeInfo {
+                        challenge: get("code_challenge"),
+                        redirect_uri: redirect,
+                        scope: get("scope"),
+                        used: false,
+                    },
+                );
+                loc.query_pairs_mut()
+                    .append_pair("code", &code)
+                    .append_pair("state", &get("state"));
+            }
+            Some((
+                Canned::empty(303).header("location", loc.as_str()),
+                Duration::ZERO,
+            ))
+        }
+        ("GET", "/oauth/code") => {
+            let code = rec
+                .uri
+                .split_once('?')
+                .and_then(|(_, q)| {
+                    url::form_urlencoded::parse(q.as_bytes())
+                        .find(|(k, _)| k == "code")
+                        .map(|(_, v)| v.into_owned())
+                })
+                .unwrap_or_default();
+            Some((
+                Canned::bytes(
+                    200,
+                    "text/html",
+                    format!("<code id=\"code\">{code}</code>").into_bytes(),
+                ),
+                Duration::ZERO,
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -460,4 +605,36 @@ pub fn run(cmd: &mut Command) -> Out {
 
 pub fn sleep_ms(ms: u64) {
     std::thread::sleep(Duration::from_millis(ms));
+}
+
+// ---- the "browser" ----
+
+/// Follows redirects like a browser and returns the final status and body.
+pub fn browse(url: &str) -> (u16, String) {
+    let c = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap();
+    let r = c.get(url).send().unwrap();
+    (r.status().as_u16(), r.text().unwrap_or_default())
+}
+
+/// An opener that browses the URL on another thread and returns at once.
+pub fn browser_opener() -> impl Fn(&str) -> std::io::Result<()> {
+    |url: &str| {
+        let url = url.to_owned();
+        std::thread::spawn(move || {
+            browse(&url);
+        });
+        Ok(())
+    }
+}
+
+pub fn code_from_page(html: &str) -> String {
+    let start = html
+        .find("<code id=\"code\">")
+        .expect("no code on the page")
+        + 16;
+    let end = html[start..].find("</code>").unwrap() + start;
+    html[start..end].to_owned()
 }

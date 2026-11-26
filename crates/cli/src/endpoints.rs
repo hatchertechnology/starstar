@@ -38,6 +38,10 @@ pub fn health() -> Endpoint {
     Endpoint::new(Method::GET, &["api", "health"])
 }
 
+pub fn setup() -> Endpoint {
+    Endpoint::new(Method::POST, &["api", "setup"])
+}
+
 pub fn me() -> Endpoint {
     Endpoint::new(Method::GET, &["api", "me"])
 }

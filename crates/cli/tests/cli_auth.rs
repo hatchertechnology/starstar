@@ -2,9 +2,12 @@ mod support;
 
 use std::time::Duration;
 
-use starstar_cli::client::ApiClient;
+use starstar_cli::client::{ApiClient, build_http};
 use starstar_cli::endpoints;
+use starstar_cli::error::CliError;
+use starstar_cli::login::login_loopback;
 use starstar_cli::session::{PlainHttpWarner, TokenSource};
+use starstar_shared::Role;
 use support::*;
 
 fn with_token(fake: &FakeApi, home: &std::path::Path, token: &str) -> std::process::Command {
@@ -223,4 +226,136 @@ fn status_over_lan_http_does_not_warn() {
     let (client, buf) = lan_client(&fake, false);
     let _: serde_json::Value = client.get_json(&endpoints::health()).unwrap();
     assert!(buf.lock().unwrap().is_empty());
+}
+
+// ---- loopback login ----
+
+fn login(
+    fake: &FakeApi,
+    timeout: Duration,
+    open: &dyn Fn(&str) -> std::io::Result<()>,
+) -> Result<starstar_cli::credentials::StoredToken, CliError> {
+    let api: url::Url = fake.url.parse().unwrap();
+    login_loopback(
+        &build_http().unwrap(),
+        &api,
+        Role::Operator,
+        timeout,
+        open,
+        &mut Vec::new(),
+    )
+}
+
+#[test]
+fn loopback_login_end_to_end() {
+    let fake = FakeApi::start();
+    let tok = login(&fake, Duration::from_secs(5), &browser_opener()).unwrap();
+    assert_eq!(tok.access_token, "ss_at_c1");
+    assert_eq!(tok.token_endpoint, format!("{}/oauth/token", fake.url));
+    let auths = fake.authorizations();
+    assert_eq!(auths.len(), 1);
+    let (_, redirect, scope) = &auths[0];
+    assert!(
+        redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/callback"),
+        "{redirect}"
+    );
+    assert_eq!(scope, "starstar:operator");
+}
+
+#[test]
+fn callback_ignores_stray_requests() {
+    let fake = FakeApi::start();
+    let opener = |url: &str| {
+        let url = url.to_owned();
+        std::thread::spawn(move || {
+            let u: url::Url = url.parse().unwrap();
+            let redirect = u
+                .query_pairs()
+                .find(|(k, _)| k == "redirect_uri")
+                .unwrap()
+                .1
+                .into_owned();
+            let origin = redirect.trim_end_matches("/callback").to_owned();
+            assert_eq!(browse(&format!("{origin}/favicon.ico")).0, 404);
+            assert_eq!(
+                browse(&format!("{origin}/callback?code=x&state=wrong")).0,
+                400
+            );
+            browse(&url);
+        });
+        Ok(())
+    };
+    let tok = login(&fake, Duration::from_secs(5), &opener).unwrap();
+    assert_eq!(tok.access_token, "ss_at_c1");
+}
+
+#[test]
+fn denied_sign_in_fails_clearly() {
+    let fake = FakeApi::start();
+    fake.deny_next();
+    let Err(CliError::Auth(m)) = login(&fake, Duration::from_secs(5), &browser_opener()) else {
+        panic!("expected an auth error")
+    };
+    assert!(m.contains("denied"), "{m}");
+    assert!(fake.find("POST", "/oauth/token").is_empty());
+}
+
+#[test]
+fn login_times_out() {
+    let fake = FakeApi::start();
+    let start = std::time::Instant::now();
+    let Err(CliError::Auth(m)) = login(&fake, Duration::from_millis(300), &|_| Ok(())) else {
+        panic!("expected an auth error")
+    };
+    assert!(m.contains("timed out") && m.contains("--no-browser"), "{m}");
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn metadata_on_foreign_origin_is_refused() {
+    let fake = FakeApi::start();
+    let u = &fake.url;
+    fake.set(
+        "GET",
+        "/.well-known/oauth-authorization-server",
+        Canned::json(
+            200,
+            serde_json::json!({
+                "issuer": u,
+                "authorization_endpoint": format!("{u}/oauth/authorize"),
+                "token_endpoint": "https://evil.example/token",
+            }),
+        ),
+    );
+    let opened = std::cell::Cell::new(false);
+    let r = login(&fake, Duration::from_secs(1), &|_| {
+        opened.set(true);
+        Ok(())
+    });
+    assert!(matches!(r, Err(CliError::Other(_))));
+    assert!(!opened.get());
+}
+
+#[test]
+fn metadata_with_self_consistent_foreign_issuer_is_refused() {
+    let fake = FakeApi::start();
+    fake.set(
+        "GET",
+        "/.well-known/oauth-authorization-server",
+        Canned::json(
+            200,
+            serde_json::json!({
+                "issuer": "https://evil.example",
+                "authorization_endpoint": "https://evil.example/authorize",
+                "token_endpoint": "https://evil.example/token",
+            }),
+        ),
+    );
+    let opened = std::cell::Cell::new(false);
+    let r = login(&fake, Duration::from_secs(1), &|_| {
+        opened.set(true);
+        Ok(())
+    });
+    assert!(matches!(r, Err(CliError::Other(_))));
+    assert!(!opened.get());
 }

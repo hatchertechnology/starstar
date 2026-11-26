@@ -170,6 +170,9 @@ impl CredentialStore {
     }
 
     pub fn remove(&self, key: &str) -> CliResult<Option<StoredToken>> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
         self.update(key, |cur| Ok((None, cur)))
     }
 

@@ -6,6 +6,7 @@ pub mod commands;
 pub mod credentials;
 pub mod endpoints;
 pub mod error;
+pub mod login;
 pub mod oauth;
 pub mod output;
 pub mod session;

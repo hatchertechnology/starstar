@@ -135,6 +135,15 @@ A Haiku review of this plan found gaps. These changes are already on
 - **mcp:** `upload_file` takes base64 only, capped at `config.mcp_max_upload_bytes`.
 - **web:** polling backs off when the printer errors (5 s → 30 s). The SPA fallback router is merged last so it never shadows `/api`, `/oauth`, `/mcp` or `/.well-known`. The web part adds `web/.output` and `node_modules` to `.gitignore`. `nuxt build` and typecheck join the checks.
 
+## Revision 3 — after part-plan reviews (overrides earlier text)
+
+- `auth::protected_resource_metadata_url(state: &AppState, path: &str) -> String`. For `/mcp` paths it advertises `/.well-known/oauth-protected-resource/mcp`, whose `resource` is `{public_url}/mcp`.
+- Refresh grace mints at most one new pair per rotated token. Any further replay revokes the grant. This deliberately replaces spec resolution 5's "same successor pair", which can't be built with hashed tokens.
+- The consent decision endpoint rejects a role above `min(requested, user role)`. Admin needs an explicit `allow_admin: true`.
+- `auth::security_headers` sets `X-Frame-Options: DENY` and `CSP: frame-ancestors 'none'` on every response. The web part must not loosen it.
+- `Config.trusted_proxies` (`STARSTAR_TRUSTED_PROXIES`): `X-Forwarded-For` is honoured only from those peers.
+- A password change revokes all of that user's grants and their other sessions.
+
 ## Review Focus
 
 1. A token or session for a disabled or demoted user must stop working on the very next request, both on `/api` and `/mcp`. Owner: auth.

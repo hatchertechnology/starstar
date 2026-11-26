@@ -63,6 +63,14 @@ fn printer_at(method: Method, name: &str, rest: &[&str]) -> Endpoint {
     }
 }
 
+pub fn register_printer() -> Endpoint {
+    Endpoint::new(Method::POST, &["api", "printers"])
+}
+
+pub fn remove_printer(name: &str) -> Endpoint {
+    printer_at(Method::DELETE, name, &[])
+}
+
 pub fn printer(name: &str) -> Endpoint {
     printer_at(Method::GET, name, &[])
 }

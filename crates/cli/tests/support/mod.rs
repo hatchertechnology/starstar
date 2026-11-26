@@ -466,6 +466,8 @@ fn defaults(method: &str, path: &str) -> Canned {
             },
         ),
         ("GET", "/api/printers") => Canned::json(200, vec![mk4_summary()]),
+        ("POST", "/api/printers") => Canned::json(201, mk4_summary()),
+        ("DELETE", "/api/printers/mk4") => Canned::empty(204),
         ("GET", "/api/printers/mk4") => Canned::json(200, mk4_summary()),
         ("GET", "/api/printers/mk4/info") => Canned::json(
             200,

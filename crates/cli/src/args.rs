@@ -1,6 +1,9 @@
 //! Command-line arguments.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use starstar_shared::PrinterKind;
+
+use crate::confirm::ConfirmArgs;
 use starstar_shared::{APP_NAME, DEFAULT_API_URL, Role};
 
 /// Manage 3D printers through the starstar API.
@@ -56,6 +59,15 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum PrinterCommand {
+    /// Register a printer. The API checks it can reach the printer first.
+    Add(AddArgs),
+    /// Remove a printer from starstar. The printer itself is not changed. Needs --yes without a terminal.
+    Remove {
+        /// Printer name.
+        name: String,
+        #[command(flatten)]
+        confirm: ConfirmArgs,
+    },
     /// List registered printers.
     List,
     /// Show a registered printer's connection details.
@@ -78,4 +90,22 @@ pub enum PrinterCommand {
         /// Printer name.
         name: String,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct AddArgs {
+    /// Unique name for the printer, e.g. `office-mk4`.
+    pub name: String,
+    /// Printer model: `mk4` or `mini`.
+    #[arg(long, value_parser = |s: &str| s.parse::<PrinterKind>())]
+    pub kind: PrinterKind,
+    /// Hostname or IP address, optionally with a port.
+    #[arg(long)]
+    pub host: String,
+    /// PrusaLink username.
+    #[arg(long)]
+    pub username: String,
+    /// Read the password from stdin instead of prompting for it.
+    #[arg(long)]
+    pub password_stdin: bool,
 }

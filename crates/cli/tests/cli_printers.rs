@@ -69,3 +69,74 @@ fn forbidden_exits_4() {
     assert_eq!(out.code, 4);
     assert!(out.stderr.contains("admin role"), "{}", out.stderr);
 }
+
+#[test]
+fn adds_printer_with_password_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let mut child = with_token(&fake, home.path())
+        .args([
+            "printer",
+            "add",
+            "mk4",
+            "--kind",
+            "mk4",
+            "--host",
+            "10.0.0.5",
+            "--username",
+            "maker",
+            "--password-stdin",
+            "--json",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"hunter2\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("hunter2"));
+    let posts = fake.find("POST", "/api/printers");
+    assert_eq!(
+        posts[0].json(),
+        json!({"name":"mk4","kind":"mk4","host":"10.0.0.5","username":"maker","password":"hunter2"})
+    );
+}
+
+#[test]
+fn printer_remove_without_tty_refuses_and_sends_nothing() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let out = run(with_token(&fake, home.path()).args(["printer", "remove", "mk4"]));
+    assert_eq!(out.code, 5);
+    assert!(out.stderr.contains("--yes"), "{}", out.stderr);
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn printer_remove_with_yes() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let out =
+        run(with_token(&fake, home.path()).args(["--json", "printer", "remove", "mk4", "--yes"]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.json(), json!({"printer": "mk4", "action": "remove"}));
+    assert_eq!(fake.find("DELETE", "/api/printers/mk4").len(), 1);
+}
+
+#[test]
+fn refusal_does_not_need_a_sign_in() {
+    // Nothing is stored and no token is set: the refusal still comes first.
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let out = run(cli(&fake, home.path()).args(["printer", "remove", "mk4"]));
+    assert_eq!(out.code, 5);
+    assert!(fake.requests().is_empty());
+}

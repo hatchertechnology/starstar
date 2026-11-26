@@ -1,11 +1,14 @@
 //! `printer …` commands.
 
+use serde_json::json;
 use starstar_shared::{
-    PrinterInfo, PrinterStatus, PrinterSummary, StorageDevice, is_valid_printer_name,
+    PrinterInfo, PrinterStatus, PrinterSummary, RegisterPrinter, StorageDevice,
+    is_valid_printer_name,
 };
 
-use super::Ctx;
-use crate::args::PrinterCommand;
+use super::{Ctx, read_secret};
+use crate::args::{AddArgs, PrinterCommand};
+use crate::confirm::confirm_here;
 use crate::endpoints;
 use crate::error::{CliError, CliResult};
 use crate::output::{or_dash, temperature};
@@ -24,6 +27,20 @@ pub fn check_name(name: &str) -> CliResult<()> {
 pub fn run(ctx: &Ctx, command: PrinterCommand) -> CliResult<()> {
     let out = ctx.out;
     match command {
+        PrinterCommand::Add(args) => add(ctx, args)?,
+        PrinterCommand::Remove { name, confirm } => {
+            check_name(&name)?;
+            // Ask before anything can touch a token or the network.
+            confirm_here(
+                &format!("remove printer `{name}` from starstar"),
+                confirm.yes,
+            )?;
+            ctx.client()?
+                .send_empty(&endpoints::remove_printer(&name), None)?;
+            out.emit(&json!({"printer": name, "action": "remove"}), || {
+                format!("removed printer `{name}`")
+            });
+        }
         PrinterCommand::List => {
             let printers: Vec<PrinterSummary> = ctx.client()?.get_json(&endpoints::printers())?;
             out.emit_value(&printers, || {
@@ -116,5 +133,32 @@ pub fn run(ctx: &Ctx, command: PrinterCommand) -> CliResult<()> {
             });
         }
     }
+    Ok(())
+}
+
+fn add(ctx: &Ctx, args: AddArgs) -> CliResult<()> {
+    check_name(&args.name)?;
+    let password = read_secret(
+        &format!("Password for {}@{}: ", args.username, args.host),
+        args.password_stdin,
+    )?;
+    let printer: PrinterSummary = ctx.client()?.send_json(
+        &endpoints::register_printer(),
+        &RegisterPrinter {
+            name: args.name,
+            kind: args.kind,
+            host: args.host,
+            username: args.username,
+            password,
+        },
+    )?;
+    ctx.out.emit_value(&printer, || {
+        format!(
+            "registered {} printer `{}` at {}",
+            printer.kind.as_str(),
+            printer.name,
+            printer.host
+        )
+    });
     Ok(())
 }

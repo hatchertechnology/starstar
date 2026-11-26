@@ -262,4 +262,46 @@ mod tests {
         let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
         assert_eq!(text.lines().count(), 1, "{text}");
     }
+
+    /// A stored sign-in whose token endpoint refuses connections, so any
+    /// network refresh fails loudly.
+    fn source_with(access: &str, expires_at: i64) -> (tempfile::TempDir, TokenSource) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CredentialStore::at(dir.path().join("cfg/starstar/credentials.json"));
+        let api = Url::parse("http://127.0.0.1:1").unwrap();
+        store
+            .put(
+                &server_key(&api),
+                StoredToken {
+                    access_token: access.into(),
+                    refresh_token: "rt".into(),
+                    expires_at,
+                    scope: "starstar:operator".into(),
+                    issuer: "http://127.0.0.1:1".into(),
+                    token_endpoint: "http://127.0.0.1:1/oauth/token".into(),
+                    revocation_endpoint: None,
+                },
+            )
+            .unwrap();
+        let http = crate::client::build_http().unwrap();
+        let src = TokenSource::stored(api, store, http, PlainHttpWarner::stderr()).unwrap();
+        (dir, src)
+    }
+
+    #[test]
+    fn refresh_rechecks_after_taking_the_lock() {
+        // Another process refreshed while we waited: the entry is fresh now,
+        // so no second rotation (the endpoint is dead and would fail).
+        let (_dir, src) = source_with("at_new", now() + 3600);
+        assert_eq!(src.refresh(Reason::Expiring(60)).unwrap(), "at_new");
+        assert_eq!(src.refresh(Reason::Rejected("at_old")).unwrap(), "at_new");
+        // Still the same token we were told was rejected: that one must be refreshed.
+        assert!(src.refresh(Reason::Rejected("at_new")).is_err());
+    }
+
+    #[test]
+    fn refresh_of_an_expiring_entry_goes_to_the_network() {
+        let (_dir, src) = source_with("at_soon", now() + 10);
+        assert!(src.refresh(Reason::Expiring(60)).is_err());
+    }
 }

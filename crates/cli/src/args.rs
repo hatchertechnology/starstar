@@ -1,5 +1,7 @@
 //! Command-line arguments.
 
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 use starstar_shared::PrinterKind;
 
@@ -58,6 +60,9 @@ pub enum Command {
     /// Show and cancel a file transfer to the printer.
     #[command(subcommand)]
     Transfer(TransferCommand),
+    /// List, inspect, upload, print and delete files on a printer.
+    #[command(subcommand)]
+    Files(FilesCommand),
     /// List and inspect printers.
     #[command(subcommand)]
     Printer(PrinterCommand),
@@ -173,5 +178,57 @@ pub enum TransferCommand {
         /// Transfer id. Without it, the current transfer is looked up first.
         #[arg(long)]
         id: Option<u64>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FilesCommand {
+    /// List a folder: `<storage>` or `<storage>/<path>`.
+    Ls {
+        /// Printer name.
+        printer: String,
+        /// Storage and folder, e.g. `usb` or `usb/parts`.
+        remote: String,
+    },
+    /// Show a file's details and whether it is read-only or printing.
+    Info {
+        /// Printer name.
+        printer: String,
+        /// File, e.g. `usb/cube.bgcode`.
+        remote: String,
+    },
+    /// Upload a local file to the printer.
+    Upload {
+        /// Printer name.
+        printer: String,
+        /// Destination: a folder (`usb` or `usb/parts/`) or a file path (`usb/cube.bgcode`).
+        remote: String,
+        /// Local file to upload.
+        local: PathBuf,
+        /// Replace a file of the same name.
+        #[arg(long)]
+        overwrite: bool,
+        /// Start printing as soon as the upload finishes.
+        #[arg(long)]
+        print: bool,
+    },
+    /// Start printing a file on the printer.
+    Print {
+        /// Printer name.
+        printer: String,
+        /// File, e.g. `usb/cube.bgcode`.
+        remote: String,
+    },
+    /// Delete a file or folder. Needs --yes without a terminal.
+    Rm {
+        /// Printer name.
+        printer: String,
+        /// File or folder, e.g. `usb/cube.bgcode`.
+        remote: String,
+        /// Delete even if read-only or in use, and folders with everything in them.
+        #[arg(long)]
+        force: bool,
+        #[command(flatten)]
+        confirm: ConfirmArgs,
     },
 }

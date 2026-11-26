@@ -137,6 +137,44 @@ pub fn cancel_transfer(printer: &str, id: u64) -> Endpoint {
     printer_at(Method::DELETE, printer, &["transfer", &id.to_string()])
 }
 
+fn file_at(method: Method, printer: &str, path: &RemotePath, suffix: &[&str]) -> Endpoint {
+    let mut rest = vec!["files", path.storage.as_str()];
+    rest.extend(path.segments.iter().map(String::as_str));
+    rest.extend_from_slice(suffix);
+    printer_at(method, printer, &rest)
+}
+
+pub fn file_get(printer: &str, path: &RemotePath) -> Endpoint {
+    file_at(Method::GET, printer, path, &[])
+}
+
+pub fn file_head(printer: &str, path: &RemotePath) -> Endpoint {
+    file_at(Method::HEAD, printer, path, &[])
+}
+
+pub fn file_print(printer: &str, path: &RemotePath) -> Endpoint {
+    file_at(Method::POST, printer, path, &["print"])
+}
+
+pub fn file_delete(printer: &str, path: &RemotePath, force: bool) -> Endpoint {
+    let mut ep = file_at(Method::DELETE, printer, path, &[]);
+    if force {
+        ep.query.push(("force", "true".into()));
+    }
+    ep
+}
+
+pub fn file_upload(printer: &str, path: &RemotePath, overwrite: bool, print: bool) -> Endpoint {
+    let mut ep = file_at(Method::PUT, printer, path, &[]);
+    if overwrite {
+        ep.query.push(("overwrite", "true".into()));
+    }
+    if print {
+        ep.query.push(("print", "true".into()));
+    }
+    ep
+}
+
 /// A place on a printer's storage: `<storage>[/<path…>]`. Segments are kept
 /// apart so each one is encoded on its own and never interpreted as a path.
 #[derive(Debug, Clone, PartialEq, Eq)]

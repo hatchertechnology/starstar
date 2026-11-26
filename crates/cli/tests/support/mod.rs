@@ -19,8 +19,8 @@ use starstar_cli::credentials::{CredentialStore, StoredToken, server_key};
 use starstar_cli::oauth::Pkce;
 use starstar_shared::auth::{TokenResponse, WhoAmI};
 use starstar_shared::{
-    Health, Job, JobFile, PrinterInfo, PrinterKind, PrinterStatus, PrinterSummary, Role,
-    StorageDevice, Transfer,
+    FileEntry, FileKind, Health, Job, JobFile, PrintMeta, PrinterInfo, PrinterKind, PrinterStatus,
+    PrinterSummary, Role, StorageDevice, Transfer,
 };
 
 pub const TOKEN: &str = "ss_at_test";
@@ -491,6 +491,36 @@ fn defaults(method: &str, path: &str) -> Canned {
         ("PUT" | "DELETE", p) if p.starts_with("/api/printers/mk4/job/") => Canned::empty(204),
         ("GET", "/api/printers/mk4/transfer") => Canned::json(200, transfer(Some(7))),
         ("DELETE", p) if p.starts_with("/api/printers/mk4/transfer/") => Canned::empty(204),
+        ("GET", "/api/printers/mk4/files/usb") => Canned::json(
+            200,
+            FileEntry {
+                children: Some(vec![
+                    entry("cube-12mm.bgcode", FileKind::PrintFile, Some(123_456)),
+                    entry("parts", FileKind::Folder, None),
+                ]),
+                ..entry("usb", FileKind::Folder, None)
+            },
+        ),
+        ("GET", "/api/printers/mk4/files/usb/cube-12mm.bgcode") => Canned::json(
+            200,
+            FileEntry {
+                meta: Some(PrintMeta {
+                    estimated_print_time: Some(3000),
+                    filament_type: Some("PLA".into()),
+                    layer_height: Some(0.2),
+                    nozzle_temp: Some(215.0),
+                    bed_temp: Some(60.0),
+                    filament_used_g: Some(3.1),
+                    ..Default::default()
+                }),
+                ..entry("cube-12mm.bgcode", FileKind::PrintFile, Some(123_456))
+            },
+        ),
+        ("HEAD", "/api/printers/mk4/files/usb/cube-12mm.bgcode") => Canned::empty(200)
+            .header("read-only", "false")
+            .header("currently-printed", "true"),
+        ("POST" | "DELETE", p) if p.starts_with("/api/printers/mk4/files/") => Canned::empty(204),
+        ("PUT", p) if p.starts_with("/api/printers/mk4/files/") => Canned::empty(201),
         ("POST", "/api/printers") => Canned::json(201, mk4_summary()),
         ("DELETE", "/api/printers/mk4") => Canned::empty(204),
         ("GET", "/api/printers/mk4") => Canned::json(200, mk4_summary()),
@@ -531,6 +561,19 @@ fn defaults(method: &str, path: &str) -> Canned {
             }],
         ),
         _ => Canned::json(404, json!({"error": "not found"})),
+    }
+}
+
+pub fn entry(name: &str, kind: FileKind, size: Option<u64>) -> FileEntry {
+    FileEntry {
+        name: name.into(),
+        display_name: Some(name.into()),
+        kind,
+        read_only: false,
+        size,
+        modified: None,
+        meta: None,
+        children: None,
     }
 }
 

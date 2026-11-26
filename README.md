@@ -18,11 +18,11 @@ starstar manages Prusa MK4 and MINI printers through PrusaLink. It has:
 Build the web UI, then start the API. It listens on `127.0.0.1:8080`, stores data in `starstar.db` and serves `web/.output/public` (set `STARSTAR_WEB_DIR` to change it).
 
 ```sh
-(cd web && npm install && npx nuxt generate)
+(cd web && npm ci && npx nuxt generate)
 cargo run -p starstar-api
 ```
 
-Useful settings: `STARSTAR_BIND`, `STARSTAR_PUBLIC_URL` (the URL clients use, needed for OAuth and MCP), `STARSTAR_DATABASE`.
+Useful settings: `STARSTAR_BIND`, `STARSTAR_PUBLIC_URL` (the URL clients use, needed for OAuth and MCP), `STARSTAR_DATABASE`. Set `STARSTAR_ALLOW_INSECURE_HTTP=1` to bind a non-loopback address with an `http://` public URL (for example on a LAN).
 
 ### First admin
 
@@ -36,14 +36,14 @@ cargo run -q -p starstar-cli -- setup --username admin
 
 ```sh
 cargo install --path crates/cli --locked   # installs `starstar`
-starstar login                             # opens a browser; add --no-browser on a headless machine
+starstar login --role admin                # opens a browser; add --no-browser on a headless machine
 starstar printer add mk4 --kind mk4 --host 192.168.1.201 --username maker
 starstar printer status mk4
 starstar job show mk4 --json
 starstar files upload mk4 usb/ prints/cube-12mm/cube-12mm.MK4.bgcode
 ```
 
-Point the CLI elsewhere with `--api-url` or `STARSTAR_API_URL`. For scripts, set `STARSTAR_TOKEN`. `printer add` prompts for the PrusaLink password, or reads it with `--password-stdin`; the API checks it can reach the printer before saving it. Run `starstar --help` for every command.
+`login` defaults to the operator role, which cannot register printers; use `--role admin` for `printer add` and other admin commands, and plain `starstar login` for day-to-day printing. Point the CLI elsewhere with `--api-url` or `STARSTAR_API_URL`. For scripts, set `STARSTAR_TOKEN`. `printer add` prompts for the PrusaLink password, or reads it with `--password-stdin`; the API checks it can reach the printer before saving it. Run `starstar --help` for every command.
 
 ## MCP
 

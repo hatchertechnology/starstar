@@ -22,4 +22,4 @@ Then authenticate from the client (in Claude Code, `/mcp`). A browser opens for 
 
 ## Safety
 
-Same rules as the CLI: call `printer_status` and `get_job` before `upload_file` or `start_print`, and call `start_print`, `stop_job`, `delete_file`, `remove_printer` and `apply_update` only on the user's go-ahead. Destructive tools are annotated `destructive`; clients may prompt, but do not rely on that.
+Same rules as the CLI: call `printer_status` and `get_job` before `upload_file` or `start_print`, and call `start_print`, `stop_job`, `delete_file`, `remove_printer` and `apply_update` only on the user's go-ahead, and `pause_job`, `resume_job` and `cancel_transfer` only when asked. Destructive tools are annotated `destructive`; clients may prompt, but do not rely on that.

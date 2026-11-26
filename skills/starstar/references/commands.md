@@ -141,7 +141,7 @@ Usage: starstar files rm [OPTIONS] <PRINTER> <REMOTE>
 Arguments:
   <PRINTER>  Printer name
   <REMOTE>   File or folder, e.g. `usb/cube.bgcode`
-      --force              Delete even if read-only or in use, and folders with everything in them
+      --force              Delete a non-empty folder with everything in it (PrusaLink `Force` header)
   -y, --yes                Do not ask for confirmation. Required when there is no terminal
 
 === camera
@@ -194,24 +194,13 @@ Usage: starstar camera register [OPTIONS] <PRINTER> <ID>
 Arguments:
   <PRINTER>  Printer name
   <ID>       Camera id
-          Base URL of the starstar API [env: STARSTAR_API_URL=] [default: http://127.0.0.1:8080]
-      --name <NAME>
-          Camera name
-      --json
-          Print results (and errors) as JSON
-      --trigger <TRIGGER>
-          When to take pictures [possible values: ten-sec, thirty-sec, sixty-sec, each-layer, fifth-layer, manual]
-      --resolution <RESOLUTION>
-          Resolution as WIDTHxHEIGHT
-      --rotation <ROTATION>
-          Rotation in degrees
-      --focus <FOCUS>
-          Focus
-      --exposure <EXPOSURE>
-          Exposure
-      --send-to-connect <SEND_TO_CONNECT>
-          Send pictures to Prusa Connect: true or false [possible values: true, false]
-          Print help
+      --name <NAME>                          Camera name
+      --trigger <TRIGGER>                    When to take pictures [possible values: ten-sec, thirty-sec, sixty-sec, each-layer, fifth-layer, manual]
+      --resolution <RESOLUTION>              Resolution as WIDTHxHEIGHT
+      --rotation <ROTATION>                  Rotation in degrees
+      --focus <FOCUS>                        Focus
+      --exposure <EXPOSURE>                  Exposure
+      --send-to-connect <SEND_TO_CONNECT>    Send pictures to Prusa Connect: true or false [possible values: true, false]
 
 === camera config
 Change a camera's settings (give at least one)
@@ -219,24 +208,13 @@ Usage: starstar camera config [OPTIONS] <PRINTER> <ID>
 Arguments:
   <PRINTER>  Printer name
   <ID>       Camera id
-          Base URL of the starstar API [env: STARSTAR_API_URL=] [default: http://127.0.0.1:8080]
-      --name <NAME>
-          Camera name
-      --json
-          Print results (and errors) as JSON
-      --trigger <TRIGGER>
-          When to take pictures [possible values: ten-sec, thirty-sec, sixty-sec, each-layer, fifth-layer, manual]
-      --resolution <RESOLUTION>
-          Resolution as WIDTHxHEIGHT
-      --rotation <ROTATION>
-          Rotation in degrees
-      --focus <FOCUS>
-          Focus
-      --exposure <EXPOSURE>
-          Exposure
-      --send-to-connect <SEND_TO_CONNECT>
-          Send pictures to Prusa Connect: true or false [possible values: true, false]
-          Print help
+      --name <NAME>                          Camera name
+      --trigger <TRIGGER>                    When to take pictures [possible values: ten-sec, thirty-sec, sixty-sec, each-layer, fifth-layer, manual]
+      --resolution <RESOLUTION>              Resolution as WIDTHxHEIGHT
+      --rotation <ROTATION>                  Rotation in degrees
+      --focus <FOCUS>                        Focus
+      --exposure <EXPOSURE>                  Exposure
+      --send-to-connect <SEND_TO_CONNECT>    Send pictures to Prusa Connect: true or false [possible values: true, false]
 
 === camera remove
 Remove a camera from the printer

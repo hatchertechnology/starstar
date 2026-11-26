@@ -143,3 +143,182 @@ async fn bad_camera_id_is_400() {
     assert!(r.json()["error"].as_str().unwrap().contains("camera id"));
     assert!(api.fake.requests().is_empty());
 }
+
+#[tokio::test]
+async fn orders_cameras() {
+    let api = TestApi::start().await;
+    let r = api
+        .send_json(
+            Role::Admin,
+            Method::PUT,
+            "/api/printers/mk4/cameras/order",
+            json!(["cam2", "cam1"]),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text());
+    let sent = api.fake.authorized(Method::PUT);
+    let sent = sent.iter().find(|q| q.uri == "/api/v1/cameras").unwrap();
+    let body: Value = serde_json::from_slice(&sent.body).unwrap();
+    assert_eq!(body, json!(["cam2", "cam1"]));
+}
+
+#[tokio::test]
+async fn order_rejects_bad_ids() {
+    let api = TestApi::start().await;
+    let r = api
+        .send_json(
+            Role::Admin,
+            Method::PUT,
+            "/api/printers/mk4/cameras/order",
+            json!(["cam1", "a/b"]),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(api.fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn patches_camera_config_in_prusalink_shape() {
+    let api = TestApi::start().await;
+    let r = api
+        .send_json(
+            Role::Admin,
+            Method::PATCH,
+            "/api/printers/mk4/cameras/cam1/config",
+            json!({"trigger_scheme":"each_layer","resolution":{"width":640,"height":480}}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text());
+    let sent = api.fake.authorized(Method::PATCH);
+    assert_eq!(sent[0].uri, "/api/v1/cameras/cam1/config");
+    assert_eq!(sent[0].headers["content-type"], "application/json");
+    let body: Value = serde_json::from_slice(&sent[0].body).unwrap();
+    assert_eq!(
+        body,
+        json!({"trigger_scheme":"EACH_LAYER","resolution":{"width":640,"height":480}})
+    );
+}
+
+#[tokio::test]
+async fn camera_admin_calls_forward() {
+    let api = TestApi::start().await;
+    for (method, uri, up_uri) in [
+        (
+            Method::POST,
+            "/api/printers/mk4/cameras/cam1",
+            "/api/v1/cameras/cam1",
+        ),
+        (
+            Method::DELETE,
+            "/api/printers/mk4/cameras/cam1",
+            "/api/v1/cameras/cam1",
+        ),
+        (
+            Method::DELETE,
+            "/api/printers/mk4/cameras/cam1/config",
+            "/api/v1/cameras/cam1/config",
+        ),
+        (
+            Method::POST,
+            "/api/printers/mk4/cameras/cam1/connection",
+            "/api/v1/cameras/cam1/connection",
+        ),
+        (
+            Method::DELETE,
+            "/api/printers/mk4/cameras/cam1/connection",
+            "/api/v1/cameras/cam1/connection",
+        ),
+    ] {
+        let r = if method == Method::POST && up_uri == "/api/v1/cameras/cam1" {
+            api.send_json(Role::Admin, method.clone(), uri, json!({"name":"Buddy3D"}))
+                .await
+        } else {
+            api.call(
+                Role::Admin,
+                method.clone(),
+                uri,
+                &[],
+                axum::body::Body::empty(),
+            )
+            .await
+        };
+        assert_eq!(
+            r.status,
+            StatusCode::NO_CONTENT,
+            "{method} {uri}: {}",
+            r.text()
+        );
+        assert!(
+            api.fake
+                .authorized(method.clone())
+                .iter()
+                .any(|q| q.uri == up_uri),
+            "{method} {up_uri}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn takes_snapshot() {
+    let api = TestApi::start().await;
+    let r = api
+        .call(
+            Role::Operator,
+            Method::POST,
+            "/api/printers/mk4/cameras/cam1/snap",
+            &[],
+            axum::body::Body::empty(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.headers["content-type"], "image/png");
+    assert_eq!(r.body.as_ref(), PNG);
+    let sent = api.fake.authorized(Method::POST);
+    assert_eq!(sent[0].body, b"{}");
+}
+
+#[tokio::test]
+async fn snapshot_timeout_upstream_is_504() {
+    let api = TestApi::start().await;
+    api.fake.set(
+        Method::POST,
+        "/api/v1/cameras/cam1/snap",
+        Canned::json(408, json!({"title":"Timeout","text":"camera busy"})),
+    );
+    let r = api
+        .call(
+            Role::Operator,
+            Method::POST,
+            "/api/printers/mk4/cameras/cam1/snap",
+            &[],
+            axum::body::Body::empty(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::GATEWAY_TIMEOUT);
+    assert!(r.json()["error"].as_str().unwrap().contains("camera busy"));
+}
+
+#[tokio::test]
+async fn register_conflict_is_409() {
+    let api = TestApi::start().await;
+    api.fake.set(
+        Method::POST,
+        "/api/v1/cameras/cam1",
+        Canned::json(409, json!({"title":"Conflict","text":"already registered"})),
+    );
+    let r = api
+        .send_json(
+            Role::Admin,
+            Method::POST,
+            "/api/printers/mk4/cameras/cam1",
+            json!({}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert!(
+        r.json()["error"]
+            .as_str()
+            .unwrap()
+            .contains("already registered")
+    );
+}

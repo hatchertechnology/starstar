@@ -377,6 +377,92 @@ impl PrusaLinkClient {
         Ok(Some(Self::image(response).await?))
     }
 
+    /// Sends `value` as a JSON body.
+    async fn send_json(
+        &self,
+        method: Method,
+        segments: &[&str],
+        value: &impl serde::Serialize,
+    ) -> Result<reqwest::Response, PrusaError> {
+        let body = serde_json::to_vec(value).map_err(|e| PrusaError::Decode(e.to_string()))?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let url = self.endpoint(segments)?;
+        self.send(method, url, headers, Some(body)).await
+    }
+
+    async fn send_empty(&self, method: Method, segments: &[&str]) -> Result<(), PrusaError> {
+        let url = self.endpoint(segments)?;
+        self.send(method, url, HeaderMap::new(), None).await?;
+        Ok(())
+    }
+
+    /// `PUT api/v1/cameras`: the order cameras are listed in.
+    pub async fn set_camera_order(&self, ids: &[String]) -> Result<(), PrusaError> {
+        self.send_json(Method::PUT, &["api", "v1", "cameras"], &ids)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn register_camera(
+        &self,
+        id: &str,
+        settings: &WireCameraSettings,
+    ) -> Result<(), PrusaError> {
+        self.send_json(Method::POST, &["api", "v1", "cameras", id], settings)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn remove_camera(&self, id: &str) -> Result<(), PrusaError> {
+        self.send_empty(Method::DELETE, &["api", "v1", "cameras", id])
+            .await
+    }
+
+    pub async fn update_camera_config(
+        &self,
+        id: &str,
+        settings: &WireCameraSettings,
+    ) -> Result<(), PrusaError> {
+        self.send_json(
+            Method::PATCH,
+            &["api", "v1", "cameras", id, "config"],
+            settings,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn reset_camera_config(&self, id: &str) -> Result<(), PrusaError> {
+        self.send_empty(Method::DELETE, &["api", "v1", "cameras", id, "config"])
+            .await
+    }
+
+    pub async fn connect_camera(&self, id: &str) -> Result<(), PrusaError> {
+        self.send_empty(Method::POST, &["api", "v1", "cameras", id, "connection"])
+            .await
+    }
+
+    pub async fn disconnect_camera(&self, id: &str) -> Result<(), PrusaError> {
+        self.send_empty(Method::DELETE, &["api", "v1", "cameras", id, "connection"])
+            .await
+    }
+
+    /// `POST api/v1/cameras/{id}/snap`: take a picture now.
+    pub async fn take_snapshot(&self, id: &str) -> Result<(String, Bytes), PrusaError> {
+        let response = self
+            .send_json(
+                Method::POST,
+                &["api", "v1", "cameras", id, "snap"],
+                &serde_json::json!({}),
+            )
+            .await?;
+        Self::image(response).await
+    }
+
     async fn image(response: reqwest::Response) -> Result<(String, Bytes), PrusaError> {
         let content_type = response
             .headers()

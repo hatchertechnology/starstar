@@ -199,3 +199,22 @@ pub struct CameraDetail {
     #[serde(default)]
     pub capabilities: Vec<String>,
 }
+
+/// Camera settings to change. Unset fields stay as they are.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CameraSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_scheme: Option<TriggerScheme>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<Resolution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to_connect: Option<bool>,
+}

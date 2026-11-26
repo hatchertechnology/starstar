@@ -2,8 +2,8 @@
 
 use serde::Deserialize;
 use starstar_shared::{
-    Camera, CameraDetail, FileEntry, FileKind, Job, JobFile, PrintMeta, Resolution, Transfer,
-    TriggerScheme,
+    Camera, CameraDetail, CameraSettings, FileEntry, FileKind, Job, JobFile, PrintMeta, Resolution,
+    Transfer, TriggerScheme,
 };
 
 /// `GET /api/version`
@@ -427,4 +427,37 @@ pub fn trigger_from_wire(value: &str) -> Option<TriggerScheme> {
         "MANUAL" => TriggerScheme::Manual,
         _ => return None,
     })
+}
+
+/// Camera settings as PrusaLink takes them; `None` fields are omitted.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct WireCameraSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_scheme: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<Resolution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_to_connect: Option<bool>,
+}
+
+impl From<CameraSettings> for WireCameraSettings {
+    fn from(s: CameraSettings) -> Self {
+        Self {
+            name: s.name,
+            trigger_scheme: s.trigger_scheme.map(trigger_to_wire),
+            resolution: s.resolution,
+            rotation: s.rotation,
+            focus: s.focus,
+            exposure: s.exposure,
+            send_to_connect: s.send_to_connect,
+        }
+    }
 }

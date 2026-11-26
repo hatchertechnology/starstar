@@ -65,6 +65,75 @@ impl FromStr for PrinterKind {
     }
 }
 
+/// Access levels, ordered from least to most privileged.
+///
+/// Every API endpoint and MCP tool requires a minimum role. A caller's
+/// effective role is the lower of its token grant and its user's current role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Read printers, status, jobs, files, transfers, cameras and snapshots.
+    Viewer,
+    /// Viewer, plus upload, start/pause/resume/continue/stop jobs, cancel transfers, take snapshots.
+    Operator,
+    /// Operator, plus printer registry, file deletion, camera settings, firmware updates, user management.
+    Admin,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Viewer => "viewer",
+            Self::Operator => "operator",
+            Self::Admin => "admin",
+        }
+    }
+
+    /// The OAuth scope that grants this role, e.g. `starstar:operator`.
+    pub fn scope(self) -> &'static str {
+        match self {
+            Self::Viewer => "starstar:viewer",
+            Self::Operator => "starstar:operator",
+            Self::Admin => "starstar:admin",
+        }
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Error returned when a string is not a known [`Role`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownRole(String);
+
+impl fmt::Display for UnknownRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unknown role `{}`, expected `viewer`, `operator` or `admin`",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnknownRole {}
+
+impl FromStr for Role {
+    type Err = UnknownRole;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "viewer" => Ok(Self::Viewer),
+            "operator" => Ok(Self::Operator),
+            "admin" => Ok(Self::Admin),
+            _ => Err(UnknownRole(s.to_owned())),
+        }
+    }
+}
+
 /// Printer names are the identifiers used in API paths: 1 to 63 lowercase
 /// ASCII letters, digits or dashes, not starting with a dash.
 pub fn is_valid_printer_name(name: &str) -> bool {
@@ -170,6 +239,14 @@ mod tests {
         assert_eq!("mk4".parse::<PrinterKind>(), Ok(PrinterKind::Mk4));
         assert_eq!("MINI".parse::<PrinterKind>(), Ok(PrinterKind::Mini));
         assert!("i3".parse::<PrinterKind>().is_err());
+    }
+
+    #[test]
+    fn roles_are_ordered_and_parse() {
+        assert!(Role::Viewer < Role::Operator && Role::Operator < Role::Admin);
+        assert_eq!("Operator".parse::<Role>(), Ok(Role::Operator));
+        assert_eq!(Role::Admin.scope(), "starstar:admin");
+        assert!("root".parse::<Role>().is_err());
     }
 
     #[test]

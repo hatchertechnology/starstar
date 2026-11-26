@@ -10,6 +10,10 @@ use crate::store::StoreError;
 #[derive(Debug)]
 pub enum ApiError {
     BadRequest(String),
+    /// No credentials, or credentials that are invalid or expired.
+    Unauthorized(String),
+    /// Authenticated, but the caller's role is too low.
+    Forbidden(String),
     NotFound(String),
     Conflict(String),
     /// The printer could not be reached or rejected the request.
@@ -21,6 +25,8 @@ impl ApiError {
     fn status(&self) -> StatusCode {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
@@ -31,6 +37,8 @@ impl ApiError {
     fn message(self) -> String {
         match self {
             Self::BadRequest(m)
+            | Self::Unauthorized(m)
+            | Self::Forbidden(m)
             | Self::NotFound(m)
             | Self::Conflict(m)
             | Self::Upstream(m)

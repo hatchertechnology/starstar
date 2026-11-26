@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use axum::Router;
 
+pub mod auth;
 pub mod error;
 pub mod prusalink;
 pub mod routes;
@@ -23,5 +24,5 @@ pub struct AppState {
 
 /// Builds the API router for the given state.
 pub fn router(state: AppState) -> Router {
-    routes::router(state)
+    routes::router(state.clone()).merge(auth::router(state))
 }

@@ -3,6 +3,7 @@
 pub mod args;
 pub mod client;
 pub mod commands;
+pub mod credentials;
 pub mod endpoints;
 pub mod error;
 pub mod output;

@@ -17,6 +17,7 @@ pub mod client_ip;
 pub mod clock;
 pub mod cookies;
 pub mod crypto;
+pub mod oauth;
 pub mod password;
 pub mod ratelimit;
 pub mod session;
@@ -226,6 +227,7 @@ pub fn router(state: AppState) -> Router {
         .merge(session::routes())
         .merge(setup::routes())
         .merge(users::routes())
+        .merge(oauth::routes())
         .with_state(state)
 }
 

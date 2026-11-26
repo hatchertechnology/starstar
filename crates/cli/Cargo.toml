@@ -13,5 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
-starstar-api.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+serde.workspace = true
+rpassword.workspace = true
 starstar-shared.workspace = true

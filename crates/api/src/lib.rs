@@ -1,18 +1,27 @@
 //! HTTP API for starstar.
+//!
+//! The API keeps a registry of printers and exposes one interface over all of
+//! them. Each printer's native protocol (PrusaLink) is hidden behind it.
 
-use starstar_shared::APP_NAME;
+use std::sync::Arc;
 
-/// Returns a human-readable status line for the API.
-pub fn status() -> String {
-    format!("{APP_NAME} api: ok")
+use axum::Router;
+
+pub mod error;
+pub mod prusalink;
+pub mod routes;
+pub mod store;
+
+use store::PrinterStore;
+
+/// State shared by every request handler.
+#[derive(Clone)]
+pub struct AppState {
+    pub store: Arc<PrinterStore>,
+    pub http: reqwest::Client,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn status_mentions_app_name() {
-        assert!(status().starts_with("starstar"));
-    }
+/// Builds the API router for the given state.
+pub fn router(state: AppState) -> Router {
+    routes::router(state)
 }

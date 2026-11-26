@@ -189,3 +189,20 @@ pub fn login_copy_code(
     let tokens = oauth::exchange_code(http, &meta, code, &redirect_uri, &pkce)?;
     Ok(StoredToken::from_response(&tokens, &meta))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callback_listener_is_loopback_only() {
+        let cb = Callback::bind().unwrap();
+        let addr = cb.listener.local_addr().unwrap();
+        assert!(addr.ip().is_loopback(), "bound to {addr}");
+        assert!(!addr.ip().is_unspecified(), "bound to {addr}");
+        assert_eq!(
+            cb.redirect_uri,
+            format!("http://127.0.0.1:{}{CLI_REDIRECT_PATH}", addr.port())
+        );
+    }
+}

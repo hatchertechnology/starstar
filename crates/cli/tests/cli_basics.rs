@@ -85,3 +85,43 @@ fn usage_errors_are_json_with_json_flag() {
     assert!(v["error"].as_str().unwrap().contains("nonsense"));
     assert!(v["http_status"].is_null());
 }
+
+/// A proxy address nothing listens on.
+fn dead_proxy() -> String {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    format!("http://{}", l.local_addr().unwrap())
+}
+
+/// The CLI ignores proxy variables, so a dead proxy and no `NO_PROXY` must
+/// not break a request (the sign-in, refresh and API traffic all share one client).
+fn with_dead_proxy(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    let proxy = dead_proxy();
+    for var in ["HTTP_PROXY", "ALL_PROXY", "http_proxy", "all_proxy"] {
+        cmd.env(var, &proxy);
+    }
+    cmd.env_remove("NO_PROXY").env_remove("no_proxy")
+}
+
+#[test]
+fn dead_proxy_does_not_break_the_health_check() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let out = run(with_dead_proxy(&mut cli(&fake, home.path())).arg("status"));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stdout.contains("is ok"), "{}", out.stdout);
+}
+
+#[test]
+fn dead_proxy_does_not_break_a_token_refresh() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    fake.add_refresh_token("ss_rt_1");
+    write_credentials(
+        home.path(),
+        &fake,
+        stored(&fake, "ss_at_stale", "ss_rt_1", future()),
+    );
+    let out = run(with_dead_proxy(&mut cli(&fake, home.path())).args(["printer", "list"]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(fake.refresh_count(), 1);
+}

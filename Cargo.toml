@@ -20,7 +20,10 @@ starstar-shared = { path = "crates/shared" }
 axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 diqwest = "3"
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
+digest_auth = "0.3"
+futures-util = "0.3"
+md-5 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.43", features = ["bundled"] }

@@ -5,6 +5,7 @@
 //! than read from the environment elsewhere.
 
 use std::env;
+use std::time::Duration;
 
 /// Settings for one API process. Not `Debug`: it holds the setup token.
 #[derive(Clone)]
@@ -28,6 +29,10 @@ pub struct Config {
     pub mcp_max_upload_bytes: u64,
     /// `STARSTAR_WEB_DIR`, default `web/.output/public`.
     pub web_dir: String,
+    /// `STARSTAR_PRINTER_TIMEOUT_SECS`, default 10. Per-request timeout for PrusaLink control calls.
+    pub printer_timeout: Duration,
+    /// `STARSTAR_UPLOAD_TIMEOUT_SECS`, default 3600. Per-request timeout for uploads to a printer.
+    pub upload_timeout: Duration,
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -43,6 +48,12 @@ impl Config {
                 .unwrap_or(default)
                 * MIB
         };
+        let secs = |k: &str, default: Duration| {
+            var(k)
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|v| *v > 0)
+                .map_or(default, Duration::from_secs)
+        };
         let defaults = Self::default();
         Self {
             database: var("STARSTAR_DATABASE").unwrap_or(defaults.database),
@@ -55,6 +66,8 @@ impl Config {
             max_upload_bytes: mb("STARSTAR_MAX_UPLOAD_MB", 512),
             mcp_max_upload_bytes: mb("STARSTAR_MCP_MAX_UPLOAD_MB", 25),
             web_dir: var("STARSTAR_WEB_DIR").unwrap_or(defaults.web_dir),
+            printer_timeout: secs("STARSTAR_PRINTER_TIMEOUT_SECS", defaults.printer_timeout),
+            upload_timeout: secs("STARSTAR_UPLOAD_TIMEOUT_SECS", defaults.upload_timeout),
         }
     }
 }
@@ -70,6 +83,20 @@ impl Default for Config {
             max_upload_bytes: 512 * MIB,
             mcp_max_upload_bytes: 25 * MIB,
             web_dir: "web/.output/public".to_owned(),
+            printer_timeout: Duration::from_secs(10),
+            upload_timeout: Duration::from_secs(3600),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn printer_timeouts_default() {
+        let config = Config::default();
+        assert_eq!(config.printer_timeout, Duration::from_secs(10));
+        assert_eq!(config.upload_timeout, Duration::from_secs(3600));
     }
 }

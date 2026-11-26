@@ -3,99 +3,30 @@
 //! The fake answers like the real printer: a Digest challenge first, then JSON
 //! once the request carries a Digest Authorization header.
 
-use std::net::SocketAddr;
-
-use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::http::{HeaderMap, Method, Request, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::http::{Method, Request, StatusCode, header};
+use diqwest::WithDigestAuth;
 use serde_json::{Value, json};
+use starstar_api::AppState;
+use starstar_shared::Role;
 use tower::ServiceExt;
 
 mod common;
+mod fake_prusalink;
 
-const USERNAME: &str = "maker";
-const PASSWORD: &str = "hunter2";
+use fake_prusalink::{FakePrinter, PASSWORD, USERNAME};
 
-fn guarded(headers: &HeaderMap, body: Value) -> Response {
-    let authorized = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("Digest "));
-
-    if authorized {
-        Json(body).into_response()
-    } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            [(
-                header::WWW_AUTHENTICATE,
-                r#"Digest realm="PrusaLink", nonce="abc123", qop="auth", algorithm=MD5"#,
-            )],
-        )
-            .into_response()
-    }
-}
-
-async fn fake_printer() -> SocketAddr {
-    let app = Router::new()
-        .route(
-            "/api/version",
-            get(|headers: HeaderMap| async move {
-                guarded(
-                    &headers,
-                    json!({ "api": "2.0.0", "server": "2.1.2", "firmware": "8.0.2+17092", "printer": "1.4.0" }),
-                )
-            }),
-        )
-        .route(
-            "/api/v1/info",
-            get(|headers: HeaderMap| async move {
-                guarded(
-                    &headers,
-                    json!({ "hostname": "prusa-mk4", "serial": "10589-3742441631719910", "nozzle_diameter": 0.4, "mmu": false }),
-                )
-            }),
-        )
-        .route(
-            "/api/v1/status",
-            get(|headers: HeaderMap| async move {
-                guarded(
-                    &headers,
-                    json!({ "printer": { "state": "IDLE", "temp_nozzle": 24.6, "target_nozzle": 0.0, "temp_bed": 23.3, "target_bed": 0.0 } }),
-                )
-            }),
-        )
-        .route(
-            "/api/v1/storage",
-            get(|headers: HeaderMap| async move {
-                guarded(
-                    &headers,
-                    json!({ "storage_list": [{ "path": "/usb/", "name": "usb", "type": "USB", "read_only": false, "available": true }] }),
-                )
-            }),
-        );
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    addr
-}
-
-fn app() -> Router {
-    common::test_app().0
-}
-
-/// Sends one request and returns the status and raw body text.
+/// Sends one request as `role` and returns the status and raw body text.
 async fn send(
     app: &Router,
+    state: &AppState,
+    role: Role,
     method: Method,
     uri: &str,
     body: Option<Value>,
 ) -> (StatusCode, String) {
-    let mut builder = Request::builder().method(method).uri(uri);
+    let mut builder = common::authorize(Request::builder().method(method).uri(uri), state, role);
     let body = match body {
         Some(json) => {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -128,11 +59,13 @@ fn registration(name: &str, host: &str) -> Value {
 
 #[tokio::test]
 async fn registers_printer_and_proxies_read_only_calls() {
-    let printer = fake_printer().await;
-    let app = app();
+    let printer = FakePrinter::start().await.addr;
+    let (app, state) = common::test_app();
 
     let (status, body) = send(
         &app,
+        &state,
+        Role::Admin,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", &printer.to_string())),
@@ -141,13 +74,29 @@ async fn registers_printer_and_proxies_read_only_calls() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert!(!body.contains(PASSWORD), "password leaked in response");
 
-    let (status, body) = send(&app, Method::GET, "/api/printers", None).await;
+    let (status, body) = send(
+        &app,
+        &state,
+        Role::Viewer,
+        Method::GET,
+        "/api/printers",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let list: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert!(!body.contains(PASSWORD), "password leaked in listing");
 
-    let (status, body) = send(&app, Method::GET, "/api/printers/mk4/info", None).await;
+    let (status, body) = send(
+        &app,
+        &state,
+        Role::Viewer,
+        Method::GET,
+        "/api/printers/mk4/info",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let info: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(info["kind"], "mk4");
@@ -155,32 +104,66 @@ async fn registers_printer_and_proxies_read_only_calls() {
     assert_eq!(info["api_version"], "2.0.0");
     assert_eq!(info["hostname"], "prusa-mk4");
 
-    let (status, body) = send(&app, Method::GET, "/api/printers/mk4/status", None).await;
+    let (status, body) = send(
+        &app,
+        &state,
+        Role::Viewer,
+        Method::GET,
+        "/api/printers/mk4/status",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let status_json: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(status_json["state"], "IDLE");
-    assert_eq!(status_json["nozzle_temp"], 24.6);
-    assert_eq!(status_json["bed_target"], 0.0);
+    assert_eq!(status_json["state"], "PRINTING");
+    assert_eq!(status_json["nozzle_temp"], 215.0);
+    assert_eq!(status_json["bed_target"], 60.0);
 
-    let (status, body) = send(&app, Method::GET, "/api/printers/mk4/storage", None).await;
+    let (status, body) = send(
+        &app,
+        &state,
+        Role::Viewer,
+        Method::GET,
+        "/api/printers/mk4/storage",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let storage: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(storage[0]["path"], "/usb/");
     assert_eq!(storage[0]["kind"], "USB");
     assert_eq!(storage[0]["available"], true);
 
-    let (status, _) = send(&app, Method::DELETE, "/api/printers/mk4", None).await;
+    let (status, _) = send(
+        &app,
+        &state,
+        Role::Admin,
+        Method::DELETE,
+        "/api/printers/mk4",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let (status, _) = send(&app, Method::GET, "/api/printers/mk4", None).await;
+    let (status, _) = send(
+        &app,
+        &state,
+        Role::Viewer,
+        Method::GET,
+        "/api/printers/mk4",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn rejects_invalid_requests() {
-    let app = app();
+    let (app, state) = common::test_app();
 
     let (status, _) = send(
         &app,
+        &state,
+        Role::Admin,
         Method::POST,
         "/api/printers",
         Some(registration("MK4", "127.0.0.1:1")),
@@ -190,6 +173,8 @@ async fn rejects_invalid_requests() {
 
     let (status, _) = send(
         &app,
+        &state,
+        Role::Admin,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", "http://127.0.0.1:1")),
@@ -197,19 +182,37 @@ async fn rejects_invalid_requests() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    let (status, _) = send(&app, Method::GET, "/api/printers/ghost/info", None).await;
+    let (status, _) = send(
+        &app,
+        &state,
+        Role::Viewer,
+        Method::GET,
+        "/api/printers/ghost/info",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, _) = send(&app, Method::DELETE, "/api/printers/ghost", None).await;
+    let (status, _) = send(
+        &app,
+        &state,
+        Role::Admin,
+        Method::DELETE,
+        "/api/printers/ghost",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn unreachable_printer_is_not_registered() {
-    let app = app();
+    let (app, state) = common::test_app();
 
     let (status, body) = send(
         &app,
+        &state,
+        Role::Admin,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", "127.0.0.1:1")),
@@ -217,17 +220,27 @@ async fn unreachable_printer_is_not_registered() {
     .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
 
-    let (status, _) = send(&app, Method::GET, "/api/printers/mk4", None).await;
+    let (status, _) = send(
+        &app,
+        &state,
+        Role::Viewer,
+        Method::GET,
+        "/api/printers/mk4",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn duplicate_names_are_rejected() {
-    let printer = fake_printer().await;
-    let app = app();
+    let printer = FakePrinter::start().await.addr;
+    let (app, state) = common::test_app();
 
     let (status, _) = send(
         &app,
+        &state,
+        Role::Admin,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", &printer.to_string())),
@@ -237,10 +250,80 @@ async fn duplicate_names_are_rejected() {
 
     let (status, _) = send(
         &app,
+        &state,
+        Role::Admin,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", &printer.to_string())),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+fn signed(method: &str, uri: &str) -> String {
+    let mut prompt = digest_auth::parse(
+        r#"Digest realm="PrusaLink", nonce="abc123", qop="auth", algorithm=MD5"#,
+    )
+    .unwrap();
+    let ctx = digest_auth::AuthContext::new_with_method(
+        USERNAME,
+        PASSWORD,
+        uri,
+        None::<&[u8]>,
+        digest_auth::HttpMethod::from(method.to_owned()),
+    );
+    prompt.respond(&ctx).unwrap().to_header_string()
+}
+
+#[tokio::test]
+async fn fake_rejects_wrong_digest_password() {
+    let fake = FakePrinter::start().await;
+    let url = format!("http://{}/api/version", fake.addr);
+    let client = reqwest::Client::new();
+
+    let ok = client
+        .get(&url)
+        .send_digest_auth((USERNAME, PASSWORD))
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+
+    let bad = client
+        .get(&url)
+        .send_digest_auth((USERNAME, "wrong"))
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn fake_rejects_digest_for_another_uri_or_method() {
+    let fake = FakePrinter::start().await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{}", fake.addr);
+    let auth = signed("GET", "/api/version");
+
+    let right = client
+        .get(format!("{base}/api/version"))
+        .header(header::AUTHORIZATION, &auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(right.status(), StatusCode::OK);
+
+    let other_uri = client
+        .get(format!("{base}/api/v1/info"))
+        .header(header::AUTHORIZATION, &auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other_uri.status(), StatusCode::UNAUTHORIZED);
+
+    let other_method = client
+        .head(format!("{base}/api/version"))
+        .header(header::AUTHORIZATION, &auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other_method.status(), StatusCode::UNAUTHORIZED);
 }

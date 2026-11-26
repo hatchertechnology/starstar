@@ -25,20 +25,24 @@ pub fn client_ip(parts: &Parts, trusted_proxies: &[IpNet]) -> String {
     if !trusted(peer, trusted_proxies) {
         return peer.to_string();
     }
-    let forwarded = parts
-        .headers
-        .get_all("x-forwarded-for")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .filter_map(|s| s.trim().parse::<IpAddr>().ok())
-        .collect::<Vec<_>>();
-    forwarded
-        .into_iter()
-        .rev()
-        .find(|ip| !trusted(*ip, trusted_proxies))
-        .unwrap_or(peer)
-        .to_string()
+    // Walk from the right, the end our own proxies appended to. An entry that
+    // does not parse (`ip:port`, junk, non-ASCII) ends the walk: everything
+    // left of it is attacker-controlled, so the peer is used.
+    let mut entries = Vec::new();
+    for value in parts.headers.get_all("x-forwarded-for") {
+        let Ok(value) = value.to_str() else {
+            return peer.to_string();
+        };
+        entries.extend(value.split(',').map(str::trim));
+    }
+    for entry in entries.into_iter().rev() {
+        match entry.parse::<IpAddr>() {
+            Ok(ip) if trusted(ip, trusted_proxies) => continue,
+            Ok(ip) => return ip.to_string(),
+            Err(_) => return peer.to_string(),
+        }
+    }
+    peer.to_string()
 }
 
 #[cfg(test)]
@@ -70,6 +74,24 @@ mod tests {
         assert_eq!(client_ip(&p, &[]), "203.0.113.9");
         let net: Vec<IpNet> = vec!["10.0.0.0/8".parse().unwrap()];
         assert_eq!(client_ip(&p, &net), "203.0.113.9");
+    }
+
+    #[test]
+    fn an_unparseable_entry_stops_the_walk_and_the_peer_is_used() {
+        let net: Vec<IpNet> = vec!["10.0.0.0/8".parse().unwrap()];
+        for xff in [
+            "6.6.6.6, 198.51.100.7:4711",
+            "6.6.6.6, [2001:db8::1]:80",
+            "6.6.6.6, unknown",
+            "6.6.6.6, ",
+            "6.6.6.6, 198.51.100.7:4711, 10.0.0.1",
+        ] {
+            let p = parts(Some("10.0.0.2:80"), Some(xff));
+            assert_eq!(client_ip(&p, &net), "10.0.0.2", "{xff}");
+        }
+        // Valid entries to the right of the bad one are still honoured.
+        let p = parts(Some("10.0.0.2:80"), Some("6.6.6.6, junk, 198.51.100.7"));
+        assert_eq!(client_ip(&p, &net), "198.51.100.7");
     }
 
     #[test]

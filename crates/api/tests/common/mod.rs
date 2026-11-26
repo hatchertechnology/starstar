@@ -177,3 +177,90 @@ pub fn browser_from(r: &TestResponse) -> Browser {
         csrf: r.json()["csrf_token"].as_str().unwrap().to_owned(),
     }
 }
+
+/// `(verifier, challenge)` for PKCE S256.
+pub fn pkce() -> (String, String) {
+    let verifier = starstar_api::auth::crypto::random_token("v");
+    let challenge = starstar_api::auth::crypto::pkce_s256(&verifier);
+    (verifier, challenge)
+}
+
+/// Registers a dynamic client with one redirect URI.
+pub fn register_client(state: &AppState, uri: &str) -> String {
+    state
+        .auth
+        .register_client("Test app", &[uri.to_owned()])
+        .unwrap()
+        .id
+}
+
+/// A form POST carrying the browser's cookie and CSRF header.
+pub async fn browser_form(
+    app: &Router,
+    browser: &Browser,
+    uri: &str,
+    form: &[(&str, &str)],
+) -> TestResponse {
+    let body = form
+        .iter()
+        .map(|(k, v)| format!("{}={}", urlencode(k), urlencode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let req = browser
+        .apply(Request::post(uri))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    send(app, req).await
+}
+
+/// Runs authorize + consent as a signed-in browser and returns the code.
+pub async fn authorize_code(
+    app: &Router,
+    browser: &Browser,
+    client_id: &str,
+    redirect_uri: &str,
+    challenge: &str,
+    scope: &str,
+    role: Role,
+) -> String {
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={}&code_challenge={challenge}&code_challenge_method=S256&state=xyz&scope={}",
+        urlencode(redirect_uri),
+        urlencode(scope)
+    );
+    let r = send(
+        app,
+        browser
+            .cookie_only(Request::get(uri))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, 303, "{}", r.body);
+    let loc = r.headers["location"].to_str().unwrap().to_owned();
+    let id = loc
+        .strip_prefix("/consent?request=")
+        .unwrap_or_else(|| panic!("{loc}"));
+    let admin = if role == Role::Admin { "true" } else { "false" };
+    let r = browser_form(
+        app,
+        browser,
+        "/oauth/authorize/decision",
+        &[
+            ("request", id),
+            ("decision", "allow"),
+            ("role", role.as_str()),
+            ("allow_admin", admin),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, 303, "{}", r.body);
+    let loc = r.headers["location"].to_str().unwrap();
+    url::Url::parse(loc)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_else(|| panic!("no code in {loc}"))
+}

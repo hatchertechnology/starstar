@@ -15,6 +15,7 @@ use super::password::Hasher;
 use super::ratelimit::RateLimiter;
 
 pub mod clients;
+pub mod codes;
 pub mod grants;
 pub mod sessions;
 pub mod users;
@@ -53,6 +54,7 @@ pub struct AuthStore {
     login_limiter: RateLimiter,
     setup_limiter: RateLimiter,
     register_limiter: RateLimiter,
+    pub(crate) pending: codes::PendingMap,
 }
 
 impl AuthStore {
@@ -65,6 +67,7 @@ impl AuthStore {
             login_limiter: RateLimiter::new(5, 900),
             setup_limiter: RateLimiter::new(5, 900),
             register_limiter: RateLimiter::new(20, 3600),
+            pending: codes::PendingMap::default(),
         };
         store.seed_clients()?;
         Ok(store)

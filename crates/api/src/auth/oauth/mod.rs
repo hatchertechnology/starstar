@@ -15,6 +15,7 @@ use starstar_shared::auth::OAuthErrorBody;
 use super::store::AuthStoreError;
 use crate::AppState;
 
+pub mod authorize;
 pub mod metadata;
 pub mod redirect;
 pub mod register;
@@ -115,6 +116,7 @@ impl IntoResponse for OAuthError {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .merge(authorize::routes())
         .merge(metadata::routes())
         .merge(register::routes())
 }

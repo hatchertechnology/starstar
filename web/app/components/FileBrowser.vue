@@ -179,6 +179,6 @@ const dialog = computed(() => {
 .tabs { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
 .crumbs { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin-bottom: var(--s3); }
 .link { font: inherit; background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font-weight: 600; }
-.name { font-weight: 400; overflow-wrap: anywhere; }
+.name { font-weight: 400; overflow-wrap: anywhere; min-width: 9rem; }
 .actions { white-space: nowrap; display: flex; gap: var(--s2); }
 </style>

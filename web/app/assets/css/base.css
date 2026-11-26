@@ -87,7 +87,7 @@ input:disabled, select:disabled { opacity: 0.55; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--hairline); vertical-align: middle; }
 th { font-size: var(--step--1); font-weight: 600; color: var(--ink-soft); }
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; position: relative; }
 
 /* Dialog */
 dialog { border: var(--edge) solid var(--outline); border-radius: var(--radius); background: var(--tool); color: var(--ink); padding: var(--s6); max-width: min(32rem, 92vw); }

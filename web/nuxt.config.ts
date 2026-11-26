@@ -25,6 +25,8 @@ export default defineNuxtConfig({
     },
   },
   nitro: {
+    // Only the SPA shell: client routes are served by the API's fallback, not as prerendered directories.
+    prerender: { crawlLinks: false, routes: [] },
     devProxy: Object.fromEntries(
       ['/api', '/oauth', '/mcp', '/.well-known'].map((p) => [
         p,

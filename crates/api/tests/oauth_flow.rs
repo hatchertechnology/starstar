@@ -439,12 +439,35 @@ async fn pending_requests_are_capped() {
     );
 }
 
+const COPY: &str = "http://127.0.0.1:8080/oauth/code";
+
+/// A real code issued to `starstar-cli` for `username`, through authorize + consent.
+async fn cli_code(
+    app: &Router,
+    state: &starstar_api::AppState,
+    username: &str,
+) -> (Browser, String) {
+    create_user(state, username, "pw-copy-1234", Role::Admin);
+    let b = login(app, username, "pw-copy-1234").await;
+    let (_, ch) = pkce();
+    let code = authorize_code(
+        app,
+        &b,
+        "starstar-cli",
+        COPY,
+        &ch,
+        "starstar:viewer",
+        Role::Viewer,
+    )
+    .await;
+    (b, code)
+}
+
 #[tokio::test]
 async fn copy_code_page() {
     let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    let b = login(&app, "boss", "pw-boss-123").await;
-    let r = get_as(&app, &b, "/oauth/code?code=ss_ac_abc%3Cb%3E&state=x").await;
+    let (b, code) = cli_code(&app, &state, "boss").await;
+    let r = get_as(&app, &b, &format!("/oauth/code?code={code}&state=x")).await;
     assert_eq!(r.status, 200);
     assert!(
         r.headers["content-type"]
@@ -452,7 +475,7 @@ async fn copy_code_page() {
             .unwrap()
             .starts_with("text/html")
     );
-    assert!(r.body.contains("ss_ac_abc&lt;b&gt;") && !r.body.contains("<b>"));
+    assert!(r.body.contains(&code));
     assert!(r.body.contains("<code id=\"code\">"));
     assert_eq!(r.headers["cache-control"], "no-store");
     assert_eq!(r.headers["referrer-policy"], "no-referrer");
@@ -463,6 +486,120 @@ async fn copy_code_page() {
             .contains("frame-ancestors 'none'")
     );
     assert_eq!(get(&app, "/oauth/code?code=x&state=x").await.status, 401);
+}
+
+#[tokio::test]
+async fn copy_code_page_shows_nothing_for_foreign_or_unknown_codes() {
+    let (app, state) = test_app();
+    let (_, code) = cli_code(&app, &state, "boss").await;
+    create_user(&state, "other", "pw-other-123", Role::Admin);
+    let other = login(&app, "other", "pw-other-123").await;
+    // Another user's code.
+    let r = get_as(&app, &other, &format!("/oauth/code?code={code}")).await;
+    assert!(!r.body.contains(&code), "{}", r.body);
+    // A made-up value, with markup.
+    let r = get_as(&app, &other, "/oauth/code?code=ss_ac_abc%3Cb%3E").await;
+    assert!(
+        !r.body.contains("ss_ac_abc") && !r.body.contains("<b>"),
+        "{}",
+        r.body
+    );
+
+    // A code that belongs to another client, even for the same user.
+    let id = register_client(&state, "http://127.0.0.1:1/cb");
+    let (_, ch) = pkce();
+    let b = login(&app, "boss", "pw-copy-1234").await;
+    let foreign = authorize_code(
+        &app,
+        &b,
+        &id,
+        "http://127.0.0.1:2/cb",
+        &ch,
+        "starstar:viewer",
+        Role::Viewer,
+    )
+    .await;
+    let r = get_as(&app, &b, &format!("/oauth/code?code={foreign}")).await;
+    assert!(!r.body.contains(&foreign), "{}", r.body);
+}
+
+#[tokio::test]
+async fn copy_code_page_hides_used_and_expired_codes() {
+    let (app, state) = test_app();
+    let (b, code) = cli_code(&app, &state, "boss").await;
+    state.auth.clock().advance(61);
+    let r = get_as(&app, &b, &format!("/oauth/code?code={code}")).await;
+    assert!(!r.body.contains(&code), "{}", r.body);
+
+    let (verifier, ch) = pkce();
+    let code = authorize_code(
+        &app,
+        &b,
+        "starstar-cli",
+        COPY,
+        &ch,
+        "starstar:viewer",
+        Role::Viewer,
+    )
+    .await;
+    let t = token(
+        &app,
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("client_id", "starstar-cli"),
+            ("redirect_uri", COPY),
+            ("code_verifier", &verifier),
+        ],
+    )
+    .await;
+    assert_eq!(t.status, 200, "{}", t.body);
+    let r = get_as(&app, &b, &format!("/oauth/code?code={code}")).await;
+    assert!(!r.body.contains(&code), "{}", r.body);
+}
+
+#[tokio::test]
+async fn authorize_rejects_loopback_aliases_of_own_origin() {
+    let (app, state) = test_app();
+    let (_, ch) = pkce();
+    for host in ["localhost", "[::1]"] {
+        // A hostile client cannot get a redirect onto our listener under another loopback name.
+        let id = register_client(&state, &format!("http://{host}:1/oauth/code"));
+        let r = get(
+            &app,
+            &authorize_uri(&id, &format!("http://{host}:8080/oauth/code"), &ch, ""),
+        )
+        .await;
+        assert_eq!(r.status, 400, "{host}: {}", r.body);
+        assert!(r.headers.get("location").is_none());
+        // Not even on its own port: the copy-code path is reserved for starstar-cli.
+        let r = get(
+            &app,
+            &authorize_uri(&id, &format!("http://{host}:1/oauth/code"), &ch, ""),
+        )
+        .await;
+        assert_eq!(r.status, 400, "{host}: {}", r.body);
+        // The CLI's loopback callback on our own port is refused too.
+        let r = get(
+            &app,
+            &authorize_uri(
+                "starstar-cli",
+                &format!("http://{host}:8080/callback"),
+                &ch,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(r.status, 400, "{host}: {}", r.body);
+        // And it cannot be registered.
+        let r = post_json(
+            &app,
+            "/oauth/register",
+            serde_json::json!({"redirect_uris": [format!("http://{host}:8080/cb")]}),
+        )
+        .await;
+        assert_eq!(r.status, 400, "{host}: {}", r.body);
+    }
 }
 
 // ---- token endpoint, refresh and revocation ----

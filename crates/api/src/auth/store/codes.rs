@@ -137,6 +137,28 @@ impl AuthStore {
 }
 
 impl AuthStore {
+    /// Whether `code` is a live (unused, unexpired) code issued to the CLI
+    /// client for `user_id`. The copy-code page shows nothing else.
+    pub fn code_shown_to(&self, code: &str, user_id: i64) -> Result<bool, AuthStoreError> {
+        let found = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT 1 FROM oauth_codes
+                 WHERE code_hash = ?1 AND client_id = ?2 AND user_id = ?3
+                   AND used_at IS NULL AND expires_at > ?4",
+                params![
+                    hash_token(code).to_vec(),
+                    starstar_shared::auth::CLI_CLIENT_ID,
+                    user_id,
+                    self.now()
+                ],
+                |_| Ok(()),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
     /// Exchanges an authorization code for tokens, in one `IMMEDIATE`
     /// transaction so concurrent exchanges of one code produce one success.
     ///

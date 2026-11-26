@@ -61,7 +61,7 @@ async fn register(
     if req
         .redirect_uris
         .iter()
-        .any(|u| !is_registrable(u, &state.config.public_url))
+        .any(|u| !is_registrable(u, &state.config.public_url, &state.config.bind))
     {
         return Err(OAuthError::invalid_redirect_uri(
             "redirect URIs must be https, or http on 127.0.0.1, localhost or [::1], and not on this server",

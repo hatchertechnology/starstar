@@ -92,7 +92,12 @@ async fn authorize(
         .redirect_uri
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_request("redirect_uri is required"))?;
-    if !redirect_allowed(&client, redirect_uri, &state.config.public_url) {
+    if !redirect_allowed(
+        &client,
+        redirect_uri,
+        &state.config.public_url,
+        &state.config.bind,
+    ) {
         return Err(OAuthError::invalid_request(
             "redirect_uri is not registered for this client",
         ));
@@ -311,13 +316,13 @@ async fn copy_code(
     parts: Parts,
     Query(q): Query<CodeQuery>,
 ) -> Response {
-    if session_from_parts(&parts, &state).is_err() {
+    let Ok(session) = session_from_parts(&parts, &state) else {
         return page(
             StatusCode::UNAUTHORIZED,
             "<!doctype html><meta charset=utf-8><title>starstar</title><p>Sign in first, then try again.</p>"
                 .to_owned(),
         );
-    }
+    };
     let Some(code) = q.code else {
         return page(
             StatusCode::BAD_REQUEST,
@@ -325,6 +330,20 @@ async fn copy_code(
                 .to_owned(),
         );
     };
+    // Only the signed-in user's own live CLI code is ever shown; anything else
+    // gets the same generic page, so the page cannot be used to display text
+    // chosen by a link.
+    if !state
+        .auth
+        .code_shown_to(&code, session.user_id)
+        .unwrap_or(false)
+    {
+        return page(
+            StatusCode::NOT_FOUND,
+            "<!doctype html><meta charset=utf-8><title>starstar</title><p>This code is not available. Run starstar login again.</p>"
+                .to_owned(),
+        );
+    }
     page(
         StatusCode::OK,
         format!(

@@ -7,6 +7,8 @@
 
 use std::sync::{Mutex, PoisonError};
 
+use rusqlite::{TransactionBehavior, params};
+
 use crate::store::{Db, StoreError};
 
 use super::clock::Clock;
@@ -128,6 +130,44 @@ impl AuthStore {
         self.clock.now()
     }
 
+    /// Deletes expired sessions, codes, tokens and grants, and clients that
+    /// were never used (no grant, no live code) for over 24 hours. Also drops
+    /// expired pending requests and stale limiter entries. Returns the number
+    /// of database rows deleted.
+    pub fn prune(&self) -> Result<usize, AuthStoreError> {
+        let now = self.now();
+        let mut conn = self.db.conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut deleted = 0;
+        for sql in [
+            "DELETE FROM sessions WHERE expires_at <= ?1",
+            "DELETE FROM oauth_codes WHERE expires_at <= ?1",
+            "DELETE FROM oauth_tokens WHERE expires_at <= ?1",
+            "DELETE FROM oauth_grants WHERE expires_at <= ?1",
+        ] {
+            deleted += tx.execute(sql, params![now])?;
+        }
+        deleted += tx.execute(
+            "DELETE FROM oauth_clients
+             WHERE seeded = 0 AND created_at <= ?1 - 86400
+               AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = oauth_clients.id)
+               AND NOT EXISTS (SELECT 1 FROM oauth_codes c WHERE c.client_id = oauth_clients.id AND c.expires_at > ?1)",
+            params![now],
+        )?;
+        tx.commit()?;
+        drop(conn);
+        self.prune_pending();
+        for limiter in [
+            &self.login_limiter,
+            &self.setup_limiter,
+            &self.register_limiter,
+            &self.token_limiter,
+        ] {
+            limiter.prune(now);
+        }
+        Ok(deleted)
+    }
+
     /// Sets (or clears) the one-time first-admin setup code.
     pub fn set_setup_code(&self, code: Option<String>) {
         *self
@@ -150,5 +190,48 @@ impl AuthStore {
             ),
             None => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use starstar_shared::Role;
+
+    use super::*;
+
+    #[test]
+    fn prune_removes_only_expired_rows() {
+        let s = AuthStore::open_in_memory(Clock::manual(1_000)).unwrap();
+        let u = s.create_user("a", "h", Role::Admin).unwrap();
+        let sess = s.create_session(u.id).unwrap();
+        let g = s
+            .create_grant(u.id, "starstar-cli", Role::Viewer, None)
+            .unwrap();
+        let _t = s.issue_tokens(&g).unwrap();
+        let stale = s
+            .register_client("old", &["http://127.0.0.1/cb".into()])
+            .unwrap();
+        s.clock().advance(3601); // the access token has expired, the refresh token hasn't
+        assert_eq!(s.prune().unwrap(), 1);
+        assert!(s.client(&stale.id).unwrap().is_some()); // younger than 24 h
+        s.clock().advance(7 * 86400);
+        assert_eq!(s.prune().unwrap(), 2); // the expired session and the stale client
+        assert!(s.session_caller(&sess.token).unwrap().is_none());
+        assert!(s.client(&stale.id).unwrap().is_none());
+        assert!(s.client("starstar-cli").unwrap().is_some());
+        assert_eq!(s.list_grants(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn prune_keeps_clients_that_have_grants_or_live_codes() {
+        let s = AuthStore::open_in_memory(Clock::manual(1_000)).unwrap();
+        let u = s.create_user("a", "h", Role::Admin).unwrap();
+        let used = s
+            .register_client("used", &["http://127.0.0.1/cb".into()])
+            .unwrap();
+        s.create_grant(u.id, &used.id, Role::Viewer, None).unwrap();
+        s.clock().advance(2 * 86400);
+        s.prune().unwrap();
+        assert!(s.client(&used.id).unwrap().is_some());
     }
 }

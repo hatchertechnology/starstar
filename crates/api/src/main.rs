@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use starstar_api::auth::AuthStore;
 use starstar_api::auth::clock::Clock;
@@ -52,10 +53,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let auth = state.auth.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(600));
+        loop {
+            tick.tick().await;
+            if let Err(err) = auth.prune() {
+                eprintln!("auth prune failed: {err}");
+            }
+        }
+    });
+
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     println!(
-        "starstar api listening on {} (database: {})",
-        config.bind, config.database
+        "starstar api listening on {} (public URL: {}, database: {})",
+        config.bind, config.public_url, config.database
     );
     axum::serve(
         listener,

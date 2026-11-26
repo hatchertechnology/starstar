@@ -4,7 +4,6 @@
 //! once the request carries a Digest Authorization header.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
@@ -13,10 +12,9 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde_json::{Value, json};
-use starstar_api::prusalink::http_client;
-use starstar_api::store::PrinterStore;
-use starstar_api::{AppState, router};
 use tower::ServiceExt;
+
+mod common;
 
 const USERNAME: &str = "maker";
 const PASSWORD: &str = "hunter2";
@@ -87,10 +85,7 @@ async fn fake_printer() -> SocketAddr {
 }
 
 fn app() -> Router {
-    router(AppState {
-        store: Arc::new(PrinterStore::open_in_memory().unwrap()),
-        http: http_client().unwrap(),
-    })
+    common::test_app().0
 }
 
 /// Sends one request and returns the status and raw body text.

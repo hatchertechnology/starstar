@@ -8,11 +8,13 @@ use std::sync::Arc;
 use axum::Router;
 
 pub mod auth;
+pub mod config;
 pub mod error;
 pub mod prusalink;
 pub mod routes;
 pub mod store;
 
+use config::Config;
 use store::PrinterStore;
 
 /// State shared by every request handler.
@@ -20,6 +22,8 @@ use store::PrinterStore;
 pub struct AppState {
     pub store: Arc<PrinterStore>,
     pub http: reqwest::Client,
+    pub config: Arc<Config>,
+    // auth part adds: pub auth: Arc<auth::AuthStore>,
 }
 
 /// Builds the API router for the given state.

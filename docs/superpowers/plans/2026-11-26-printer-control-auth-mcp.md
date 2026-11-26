@@ -96,6 +96,45 @@ Detailed tasks are in the part plans. These are the outcomes each part must deli
 ### mcp, cli, web, skill
 Planned in wave 2 and 3 against the merged API. Briefs are in the spec sections "MCP endpoint", "CLI", "Web UI" and "CLI skill".
 
+## Revision 2 — after plan review (overrides anything above that conflicts)
+
+A Haiku review of this plan found gaps. These changes are already on
+`sheepdog/printers` (scaffold v2) or are now binding on part plans.
+
+**Scaffold v2 (on the branch):**
+- `crates/api/src/config.rs`: `Config` (not `Debug`) with `database`, `bind`, `public_url` (no trailing slash), `allow_insecure_http`, `setup_token: Option<String>`, `max_upload_bytes`, `mcp_max_upload_bytes`, `web_dir`. It has `Config::from_env()` and `Default`. `AppState` gains `config: Arc<Config>`, and `main.rs` uses it. New settings go here only.
+- `ApiError` gains `LengthRequired` (411), `PayloadTooLarge` (413), `TooManyRequests` (429), `Printer(StatusCode, String)` (passes through PrusaLink's 404, 409 and 403; never reuse `Forbidden`, which is about starstar roles), and `GatewayTimeout` (504).
+- `tests/common`: `test_state() -> AppState` and `test_app() -> (Router, AppState)`. `tests/printers.rs` already uses `test_app`.
+
+**Ownership changes:**
+- `crates/api/src/error.rs` is scaffold-owned. Parts may add `From` impls and helpers but not change existing variants. prusa owns `From<PrusaError>`.
+- `crates/api/src/store.rs` moves to **auth**, which adds `busy_timeout`, `PRAGMA user_version` migrations covering all tables, and either a shared connection or a second connection with WAL.
+- `tests/printers.rs` stays **prusa's**. prusa changes `send` to take `&AppState` and a `Role` and route through `common::authorize`. auth changes only `tests/common/mod.rs`.
+
+**prusa, binding:**
+- **Uploads:** diqwest can't stream, because it clones the request. Use a bodyless `HEAD` on the same path to get the digest challenge, build the `Authorization` header with the `digest_auth` crate, then send the stream once with `Content-Length`. Require `Content-Length` on the incoming PUT (411 otherwise) and enforce `config.max_upload_bytes` (413). Uploads use a long per-request timeout. Test that a multi-chunk streamed body arrives intact with the right length.
+- `PrusaError` distinguishes timeouts. The mapping is 404/409/403 → `ApiError::Printer`, 408 or timeout → `GatewayTimeout`, everything else → 502.
+- Build URLs per path segment (`Url::path_segments_mut`). After decoding, reject `..`, `.`, `\`, empty segments and NUL. Reject an upload path ending in `/`, which would create a folder.
+- **Printer operation functions take `&Caller`** and call `caller.require(ROLE)` themselves, with `ROLE` a `pub const` next to each function. HTTP handlers still use the extractor matching that const. MCP tools call the same functions, so roles can't drift.
+- The fake PrusaLink verifies the digest response for real (wrong password → 401) and can inject an error status per route.
+- `validate_registration`: `host` must be `host[:port]` only (no `@`, `?`, `#` or whitespace).
+
+**auth, binding:**
+- **Default deny:** an `auth::require_auth` layer (`from_fn_with_state`) is applied to `/api/*` and `/mcp`, with an explicit allowlist (health, setup, `POST /api/session`). It authenticates, inserts `Caller` into request extensions, and on 401 adds `WWW-Authenticate: Bearer resource_metadata="{public_url}/.well-known/oauth-protected-resource"`. Extractors read the `Caller` from extensions when it's present. `tests/auth_roles.rs` covers auth's own routes, and one test walks every registered route without credentials and expects 401 unless the route is allowlisted.
+- **Refresh grace window:** reusing a rotated refresh token within 30 s mints a *new* pair on the same grant (old successors stay valid until they expire) instead of revoking. Reuse after 30 s revokes the grant. Test two concurrent refreshes, which must both succeed.
+- **Atomic invariants:** first-admin creation is a single statement or `BEGIN IMMEDIATE` transaction (two concurrent setups → exactly one admin), and so is the last-enabled-admin guard. `/api/setup`, `POST /api/session` and `/oauth/token` are rate-limited. The setup code is 128-bit random, base32.
+- Unknown users get a dummy argon2 verify, so timing doesn't reveal usernames.
+- Carry over from the spec: `Secure` cookies when `public_url` is https; `ss_at_`/`ss_rt_` prefixes with SHA-256 storage; lifetimes (access 1 h, refresh 30 d sliding, code 60 s single use, grant 90 d absolute); RFC 8707 `resource` recorded; `starstar-cli` redirect rules and the copy-code page restriction; the decision endpoint caps the granted role server-side at `min(chosen, user role)` and grants admin only when explicitly chosen.
+- `last_used` updates are throttled to at most one write per token per minute.
+- Exposes `auth::protected_resource_metadata_url(&AppState) -> String`. MCP mounts `/mcp` under `require_auth` and reads `Caller` from extensions (rmcp's streamable-HTTP service passes the HTTP request `Parts` through to tool context; the mcp part verifies this with the pinned rmcp version).
+
+**cube:** MK4 and MINI, as in the spec. Add MK4S only if both are trivially available.
+
+**Wave 2 briefs, to include in their part plans:**
+- **cli:** warn once on stderr when sending a token to a non-loopback `http://` URL. Take an advisory file lock on `credentials.json` during refresh.
+- **mcp:** `upload_file` takes base64 only, capped at `config.mcp_max_upload_bytes`.
+- **web:** polling backs off when the printer errors (5 s → 30 s). The SPA fallback router is merged last so it never shadows `/api`, `/oauth`, `/mcp` or `/.well-known`. The web part adds `web/.output` and `node_modules` to `.gitignore`. `nuxt build` and typecheck join the checks.
+
 ## Review Focus
 
 1. A token or session for a disabled or demoted user must stop working on the very next request, both on `/api` and `/mcp`. Owner: auth.

@@ -1,26 +1,26 @@
-use std::env;
 use std::error::Error;
 use std::sync::Arc;
 
+use starstar_api::config::Config;
 use starstar_api::prusalink::http_client;
 use starstar_api::store::PrinterStore;
 use starstar_api::{AppState, router};
 
-const DEFAULT_DATABASE: &str = "starstar.db";
-const DEFAULT_BIND: &str = "127.0.0.1:8080";
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let database = env::var("STARSTAR_DATABASE").unwrap_or_else(|_| DEFAULT_DATABASE.to_owned());
-    let bind = env::var("STARSTAR_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_owned());
+    let config = Config::from_env();
 
     let state = AppState {
-        store: Arc::new(PrinterStore::open(&database)?),
+        store: Arc::new(PrinterStore::open(&config.database)?),
         http: http_client()?,
+        config: Arc::new(config.clone()),
     };
 
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
-    println!("starstar api listening on {bind} (database: {database})");
+    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
+    println!(
+        "starstar api listening on {} (database: {})",
+        config.bind, config.database
+    );
     axum::serve(listener, router(state)).await?;
     Ok(())
 }

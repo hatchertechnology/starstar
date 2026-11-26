@@ -1,0 +1,47 @@
+# 12 mm test cube
+
+A 12 mm cube with a 0.5 mm bottom chamfer (against elephant's foot) and "SS"
+debossed 0.6 mm on top. Sliced for MK4S and MINI with Prusament PLA at
+0.20 mm (print profile `0.20mm SPEED`). **Nothing here has been sent to a
+printer.**
+
+## Files
+
+| File | What |
+|---|---|
+| `cube.py` | CadQuery model (PEP 723 header, run with `uv`) |
+| `cube-12mm.step`, `cube-12mm.stl` | Model exports |
+| `cube-12mm.MK4S.bgcode`, `.ini` | Binary G-code and the flat slicer config for MK4S (0.4 mm high-flow nozzle) |
+| `cube-12mm.MINI.bgcode`, `.ini` | Same for MINI & MINI+ (0.4 mm nozzle) |
+
+## Model check
+
+`uv run cube.py` prints: valid = True, 1 solid, volume 1714.71 mm³,
+bounding box 12.000 x 12.000 x 12.000 mm (measured on the tessellation; the
+raw BREP bounding box is loose on curved text faces).
+
+## Slicer estimates (PrusaSlicer 2.9.7)
+
+| Printer | Filament | Nozzle / bed | Time | Filament |
+|---|---|---|---|---|
+| MK4S (HF 0.4) | Prusament PLA @MK4S HF0.4 | 230 / 60 C | 7m 1s | 1.11 g, 371.6 mm |
+| MINI & MINI+ | Prusament PLA | 215 / 60 C | 12m 21s | 1.24 g, 416.8 mm |
+
+The MK4S file will not match a plain MK4 (G-code checks for model MK4S and a
+high-flow nozzle). For an MK4, use `--printer MK4`.
+
+## Regenerate
+
+`S` is the prusaslicer skill script
+(`<cad-skills>/skills/prusaslicer/scripts/slice.py`).
+
+```bash
+cd prints/cube-12mm
+uv run cube.py
+uv run $S slice cube-12mm.stl --printer MK4S --filament "Prusament PLA" \
+    --print "0.20mm SPEED" -o cube-12mm.MK4S.bgcode
+uv run $S slice cube-12mm.stl --printer "Original Prusa MINI & MINI+" \
+    --filament "Prusament PLA" --print "0.20mm SPEED" -o cube-12mm.MINI.bgcode
+```
+
+The `.ini` next to each G-code reproduces the exact slice.

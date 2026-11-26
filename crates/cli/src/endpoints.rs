@@ -175,6 +175,61 @@ pub fn file_upload(printer: &str, path: &RemotePath, overwrite: bool, print: boo
     ep
 }
 
+pub fn cameras(printer: &str) -> Endpoint {
+    printer_at(Method::GET, printer, &["cameras"])
+}
+
+fn camera_at(method: Method, printer: &str, id: &str, rest: &[&str]) -> CliResult<Endpoint> {
+    validate_camera_id(id)?;
+    let mut segs = vec!["cameras", id];
+    segs.extend_from_slice(rest);
+    Ok(printer_at(method, printer, &segs))
+}
+
+pub fn camera(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::GET, printer, id, &[])
+}
+
+/// The default camera's snapshot, or one camera's.
+pub fn snapshot(printer: &str, id: Option<&str>) -> CliResult<Endpoint> {
+    match id {
+        None => Ok(printer_at(Method::GET, printer, &["cameras", "snap"])),
+        Some(id) => camera_at(Method::GET, printer, id, &["snap"]),
+    }
+}
+
+pub fn take_snapshot(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::POST, printer, id, &["snap"])
+}
+
+pub fn camera_order(printer: &str) -> Endpoint {
+    printer_at(Method::PUT, printer, &["cameras", "order"])
+}
+
+pub fn register_camera(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::POST, printer, id, &[])
+}
+
+pub fn remove_camera(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::DELETE, printer, id, &[])
+}
+
+pub fn camera_config(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::PATCH, printer, id, &["config"])
+}
+
+pub fn reset_camera(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::DELETE, printer, id, &["config"])
+}
+
+pub fn connect_camera(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::POST, printer, id, &["connection"])
+}
+
+pub fn disconnect_camera(printer: &str, id: &str) -> CliResult<Endpoint> {
+    camera_at(Method::DELETE, printer, id, &["connection"])
+}
+
 /// A place on a printer's storage: `<storage>[/<path…>]`. Segments are kept
 /// apart so each one is encoded on its own and never interpreted as a path.
 #[derive(Debug, Clone, PartialEq, Eq)]

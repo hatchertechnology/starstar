@@ -10,6 +10,7 @@ use crate::error::{CliError, CliResult};
 use crate::output::Output;
 
 pub mod account;
+pub mod cameras;
 pub mod files;
 pub mod jobs;
 pub mod printers;
@@ -77,6 +78,7 @@ pub fn dispatch(cli: Cli, out: Output) -> CliResult<()> {
             password_stdin,
         } => account::setup(&ctx, username, setup_code_stdin, password_stdin),
         Command::Printer(c) => printers::run(&ctx, c),
+        Command::Camera(c) => cameras::run(&ctx, c),
         Command::Files(c) => files::run(&ctx, c),
         Command::Job(c) => jobs::run_job(&ctx, c),
         Command::Transfer(c) => jobs::run_transfer(&ctx, c),

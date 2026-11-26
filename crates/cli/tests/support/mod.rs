@@ -19,8 +19,9 @@ use starstar_cli::credentials::{CredentialStore, StoredToken, server_key};
 use starstar_cli::oauth::Pkce;
 use starstar_shared::auth::{TokenResponse, WhoAmI};
 use starstar_shared::{
-    FileEntry, FileKind, Health, Job, JobFile, PrintMeta, PrinterInfo, PrinterKind, PrinterStatus,
-    PrinterSummary, Role, StorageDevice, Transfer,
+    Camera, CameraDetail, FileEntry, FileKind, Health, Job, JobFile, PrintMeta, PrinterInfo,
+    PrinterKind, PrinterStatus, PrinterSummary, Resolution, Role, StorageDevice, Transfer,
+    TriggerScheme,
 };
 
 pub const TOKEN: &str = "ss_at_test";
@@ -521,6 +522,41 @@ fn defaults(method: &str, path: &str) -> Canned {
             .header("currently-printed", "true"),
         ("POST" | "DELETE", p) if p.starts_with("/api/printers/mk4/files/") => Canned::empty(204),
         ("PUT", p) if p.starts_with("/api/printers/mk4/files/") => Canned::empty(201),
+        ("GET", "/api/printers/mk4/cameras") => Canned::json(
+            200,
+            vec![Camera {
+                id: "cam1".into(),
+                name: Some("Buddy3D".into()),
+                driver: None,
+                path: None,
+                resolution: None,
+                connected: true,
+                detected: true,
+                stored: true,
+                linked: false,
+            }],
+        ),
+        ("GET", "/api/printers/mk4/cameras/cam1") => Canned::json(
+            200,
+            CameraDetail {
+                name: Some("Buddy3D".into()),
+                trigger_scheme: Some(TriggerScheme::ThirtySec),
+                available_resolutions: vec![],
+                resolution: Some(Resolution {
+                    width: 1280,
+                    height: 720,
+                }),
+                focus: None,
+                capabilities: vec!["trigger_scheme".into(), "resolution".into()],
+            },
+        ),
+        ("GET", "/api/printers/mk4/cameras/snap" | "/api/printers/mk4/cameras/cam1/snap")
+        | ("POST", "/api/printers/mk4/cameras/cam1/snap") => {
+            Canned::bytes(200, "image/png", PNG.to_vec())
+        }
+        ("PUT" | "PATCH" | "POST" | "DELETE", p) if p.starts_with("/api/printers/mk4/cameras/") => {
+            Canned::empty(204)
+        }
         ("POST", "/api/printers") => Canned::json(201, mk4_summary()),
         ("DELETE", "/api/printers/mk4") => Canned::empty(204),
         ("GET", "/api/printers/mk4") => Canned::json(200, mk4_summary()),
@@ -563,6 +599,8 @@ fn defaults(method: &str, path: &str) -> Canned {
         _ => Canned::json(404, json!({"error": "not found"})),
     }
 }
+
+pub const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake";
 
 pub fn entry(name: &str, kind: FileKind, size: Option<u64>) -> FileEntry {
     FileEntry {

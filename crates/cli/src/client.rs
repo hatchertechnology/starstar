@@ -254,6 +254,24 @@ impl ApiClient {
         Ok(len)
     }
 
+    /// The raw body and content type of a response; 204 means `None`.
+    pub fn get_bytes(&self, ep: &Endpoint) -> CliResult<Option<(String, Vec<u8>)>> {
+        let resp = self.plain(ep)?;
+        if resp.status().as_u16() == 204 {
+            return Ok(None);
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let bytes = resp
+            .bytes()
+            .map_err(|e| CliError::Other(format!("could not read the response: {e}")))?;
+        Ok(Some((content_type, bytes.to_vec())))
+    }
+
     pub fn head(&self, ep: &Endpoint) -> CliResult<HeaderMap> {
         Ok(self.plain(ep)?.headers().clone())
     }

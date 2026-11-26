@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use starstar_shared::PrinterKind;
+use starstar_shared::{CameraSettings, PrinterKind, Resolution, TriggerScheme};
 
 use crate::confirm::ConfirmArgs;
 use starstar_shared::{APP_NAME, DEFAULT_API_URL, Role};
@@ -63,6 +63,9 @@ pub enum Command {
     /// List, inspect, upload, print and delete files on a printer.
     #[command(subcommand)]
     Files(FilesCommand),
+    /// List, show, configure and take pictures with the printer's cameras.
+    #[command(subcommand)]
+    Camera(CameraCommand),
     /// List and inspect printers.
     #[command(subcommand)]
     Printer(PrinterCommand),
@@ -230,5 +233,171 @@ pub enum FilesCommand {
         force: bool,
         #[command(flatten)]
         confirm: ConfirmArgs,
+    },
+}
+
+/// When a camera takes pictures.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum TriggerArg {
+    #[value(alias = "ten_sec")]
+    TenSec,
+    #[value(alias = "thirty_sec")]
+    ThirtySec,
+    #[value(alias = "sixty_sec")]
+    SixtySec,
+    #[value(alias = "each_layer")]
+    EachLayer,
+    #[value(alias = "fifth_layer")]
+    FifthLayer,
+    Manual,
+}
+
+impl From<TriggerArg> for TriggerScheme {
+    fn from(t: TriggerArg) -> Self {
+        match t {
+            TriggerArg::TenSec => Self::TenSec,
+            TriggerArg::ThirtySec => Self::ThirtySec,
+            TriggerArg::SixtySec => Self::SixtySec,
+            TriggerArg::EachLayer => Self::EachLayer,
+            TriggerArg::FifthLayer => Self::FifthLayer,
+            TriggerArg::Manual => Self::Manual,
+        }
+    }
+}
+
+fn parse_resolution(s: &str) -> Result<Resolution, String> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or("use WIDTHxHEIGHT, e.g. 1280x720")?;
+    let part = |v: &str| {
+        v.parse::<u32>()
+            .map_err(|_| "use WIDTHxHEIGHT, e.g. 1280x720")
+    };
+    Ok(Resolution {
+        width: part(w)?,
+        height: part(h)?,
+    })
+}
+
+/// Camera settings; unset ones stay as they are.
+#[derive(Debug, Args)]
+pub struct SettingsArgs {
+    /// Camera name.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// When to take pictures.
+    #[arg(long, value_enum)]
+    pub trigger: Option<TriggerArg>,
+    /// Resolution as WIDTHxHEIGHT.
+    #[arg(long, value_parser = parse_resolution)]
+    pub resolution: Option<Resolution>,
+    /// Rotation in degrees.
+    #[arg(long, allow_negative_numbers = true)]
+    pub rotation: Option<i32>,
+    /// Focus.
+    #[arg(long, allow_negative_numbers = true)]
+    pub focus: Option<f64>,
+    /// Exposure.
+    #[arg(long, allow_negative_numbers = true)]
+    pub exposure: Option<f64>,
+    /// Send pictures to Prusa Connect: true or false.
+    #[arg(long)]
+    pub send_to_connect: Option<bool>,
+}
+
+impl SettingsArgs {
+    pub fn into_settings(self) -> CameraSettings {
+        CameraSettings {
+            name: self.name,
+            trigger_scheme: self.trigger.map(Into::into),
+            resolution: self.resolution,
+            rotation: self.rotation,
+            focus: self.focus,
+            exposure: self.exposure,
+            send_to_connect: self.send_to_connect,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CameraCommand {
+    /// List the printer's cameras.
+    Ls {
+        /// Printer name.
+        printer: String,
+    },
+    /// Show one camera's configuration.
+    Show {
+        /// Printer name.
+        printer: String,
+        /// Camera id.
+        id: String,
+    },
+    /// Save a camera picture to a file (or `-` for stdout).
+    Snap {
+        /// Printer name.
+        printer: String,
+        /// Camera id. Without it, the printer's default camera is used.
+        id: Option<String>,
+        /// Where to save the picture; `-` writes it to stdout.
+        #[arg(short, long)]
+        output: String,
+        /// Take a new picture now instead of fetching the last one (needs a camera id).
+        #[arg(long, requires = "id")]
+        take: bool,
+    },
+    /// Set the order of the cameras.
+    Order {
+        /// Printer name.
+        printer: String,
+        /// Camera ids in the new order.
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
+    /// Register a camera with the printer, optionally with settings.
+    Register {
+        /// Printer name.
+        printer: String,
+        /// Camera id.
+        id: String,
+        #[command(flatten)]
+        settings: SettingsArgs,
+    },
+    /// Change a camera's settings (give at least one).
+    Config {
+        /// Printer name.
+        printer: String,
+        /// Camera id.
+        id: String,
+        #[command(flatten)]
+        settings: SettingsArgs,
+    },
+    /// Remove a camera from the printer.
+    Remove {
+        /// Printer name.
+        printer: String,
+        /// Camera id.
+        id: String,
+    },
+    /// Reset a camera's settings to the defaults.
+    Reset {
+        /// Printer name.
+        printer: String,
+        /// Camera id.
+        id: String,
+    },
+    /// Connect a camera.
+    Connect {
+        /// Printer name.
+        printer: String,
+        /// Camera id.
+        id: String,
+    },
+    /// Disconnect a camera.
+    Disconnect {
+        /// Printer name.
+        printer: String,
+        /// Camera id.
+        id: String,
     },
 }

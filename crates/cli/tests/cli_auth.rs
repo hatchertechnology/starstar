@@ -3,9 +3,12 @@ mod support;
 use std::time::Duration;
 
 use starstar_cli::client::{ApiClient, build_http};
+use starstar_cli::commands::account::{LoginMethod, login_with};
+use starstar_cli::credentials::CredentialStore;
 use starstar_cli::endpoints;
 use starstar_cli::error::CliError;
-use starstar_cli::login::login_loopback;
+use starstar_cli::login::{login_copy_code, login_loopback};
+use starstar_cli::output::Output;
 use starstar_cli::session::{PlainHttpWarner, TokenSource};
 use starstar_shared::Role;
 use support::*;
@@ -358,4 +361,253 @@ fn metadata_with_self_consistent_foreign_issuer_is_refused() {
     });
     assert!(matches!(r, Err(CliError::Other(_))));
     assert!(!opened.get());
+}
+
+// ---- copy-code login, logout, whoami ----
+
+#[test]
+fn copy_code_login_end_to_end() {
+    let fake = FakeApi::start();
+    let api: url::Url = fake.url.parse().unwrap();
+    let tok = login_copy_code(
+        &build_http().unwrap(),
+        &api,
+        Role::Operator,
+        &mut |url: &str| {
+            let u: url::Url = url.parse().unwrap();
+            let redirect = u
+                .query_pairs()
+                .find(|(k, _)| k == "redirect_uri")
+                .unwrap()
+                .1
+                .into_owned();
+            assert_eq!(redirect, format!("{}/oauth/code", fake.url));
+            let (status, body) = browse(url);
+            assert_eq!(status, 200);
+            Ok(code_from_page(&body))
+        },
+    )
+    .unwrap();
+    assert!(tok.access_token.starts_with("ss_at_c"));
+}
+
+#[test]
+fn no_browser_login_via_binary() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::process::Stdio;
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let mut child = cli(&fake, home.path())
+        .args(["--json", "login", "--no-browser"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut seen = String::new();
+    let url = loop {
+        let mut line = String::new();
+        assert!(
+            stderr.read_line(&mut line).unwrap() > 0,
+            "no URL on stderr: {seen}"
+        );
+        seen.push_str(&line);
+        if line.contains("/oauth/authorize?") {
+            break line.trim().to_owned();
+        }
+    };
+    let (_, body) = browse(&url);
+    let code = code_from_page(&body);
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{code}").unwrap();
+    drop(stdin);
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).unwrap();
+    seen.push_str(&rest);
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    assert!(child.wait().unwrap().success(), "{seen}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["username"], "kerry");
+    assert!(
+        read_credentials(home.path(), &fake)
+            .unwrap()
+            .refresh_token
+            .starts_with("ss_rt_c")
+    );
+    for text in [&stdout, &seen] {
+        assert!(!text.contains(&code), "{text}");
+        assert!(
+            !text.contains("ss_at_") && !text.contains("ss_rt_"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn empty_code_is_auth_error() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let mut child = cli(&fake, home.path())
+        .args(["login", "--no-browser"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    writeln!(child.stdin.take().unwrap()).unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(3));
+}
+
+#[test]
+fn logout_revokes_and_removes() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    fake.add_refresh_token("ss_rt_1");
+    write_credentials(
+        home.path(),
+        &fake,
+        stored(&fake, "ss_at_x", "ss_rt_1", future()),
+    );
+    let out = run(cli(&fake, home.path()).arg("logout"));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(fake.revoked(), ["ss_rt_1"]);
+    assert!(read_credentials(home.path(), &fake).is_none());
+    let again = run(cli(&fake, home.path()).arg("logout"));
+    assert_eq!(again.code, 0);
+    assert!(again.stdout.contains("Not signed in"), "{}", again.stdout);
+}
+
+#[test]
+fn logout_offline_still_removes() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let mut t = stored(&fake, "ss_at_x", "ss_rt_1", future());
+    t.revocation_endpoint = Some("http://127.0.0.1:1/oauth/revoke".into());
+    write_credentials(home.path(), &fake, t);
+    let out = run(cli(&fake, home.path()).arg("logout"));
+    assert_eq!(out.code, 0);
+    assert!(out.stderr.contains("could not revoke"), "{}", out.stderr);
+    assert!(read_credentials(home.path(), &fake).is_none());
+}
+
+#[test]
+fn whoami_json_reports_source() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let out = run(with_token(&fake, home.path(), TOKEN).args(["--json", "whoami"]));
+    let v = out.json();
+    assert_eq!(
+        (v["token_source"].as_str(), v["role"].as_str()),
+        (Some("env"), Some("operator"))
+    );
+    write_credentials(
+        home.path(),
+        &fake,
+        stored(&fake, TOKEN, "ss_rt_1", future()),
+    );
+    let out = run(cli(&fake, home.path()).args(["--json", "whoami"]));
+    assert_eq!(out.json()["token_source"], "credentials");
+}
+
+#[test]
+fn login_replaces_and_revokes_previous() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    let api: url::Url = fake.url.parse().unwrap();
+    for _ in 0..2 {
+        login_with(
+            &api,
+            CredentialStore::at(credentials_path(home.path())),
+            Role::Operator,
+            LoginMethod::Loopback {
+                open: &browser_opener(),
+                timeout: Duration::from_secs(5),
+            },
+            &Output { json: true },
+        )
+        .unwrap();
+    }
+    assert_eq!(fake.revoked(), ["ss_rt_c1"]);
+    assert_eq!(
+        read_credentials(home.path(), &fake).unwrap().refresh_token,
+        "ss_rt_c2"
+    );
+}
+
+#[test]
+fn failed_me_check_revokes_the_new_grant() {
+    let fake = FakeApi::start();
+    let home = tempfile::tempdir().unwrap();
+    fake.set(
+        "GET",
+        "/api/me",
+        Canned::json(500, serde_json::json!({"error": "boom"})),
+    );
+    let api: url::Url = fake.url.parse().unwrap();
+    let r = login_with(
+        &api,
+        CredentialStore::at(credentials_path(home.path())),
+        Role::Operator,
+        LoginMethod::Loopback {
+            open: &browser_opener(),
+            timeout: Duration::from_secs(5),
+        },
+        &Output { json: true },
+    );
+    assert!(r.is_err());
+    assert_eq!(fake.revoked(), ["ss_rt_c1"]);
+    assert!(read_credentials(home.path(), &fake).is_none());
+}
+
+#[test]
+fn setup_creates_first_admin() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let fake = FakeApi::start();
+    fake.set(
+        "POST",
+        "/api/setup",
+        Canned::json(
+            201,
+            serde_json::json!({"username": "boss", "role": "admin", "csrf_token": "csrf-secret"}),
+        ),
+    );
+    let home = tempfile::tempdir().unwrap();
+    let mut child = cli(&fake, home.path())
+        .args([
+            "--json",
+            "setup",
+            "--username",
+            "boss",
+            "--setup-code-stdin",
+            "--password-stdin",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(child.stdin.take().unwrap(), "code-123\nlong-password-1\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("csrf-secret") && !stdout.contains("long-password-1"));
+    let body = fake.find("POST", "/api/setup")[0].json();
+    assert_eq!(
+        body,
+        serde_json::json!({"setup_code": "code-123", "username": "boss", "password": "long-password-1"})
+    );
 }

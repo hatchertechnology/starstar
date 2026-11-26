@@ -212,7 +212,9 @@ impl FakeApi {
     pub fn api_requests(&self) -> Vec<Recorded> {
         self.requests()
             .into_iter()
-            .filter(|r| r.uri.starts_with("/api/") && r.uri != "/api/health")
+            .filter(|r| {
+                r.uri.starts_with("/api/") && r.uri != "/api/health" && r.uri != "/api/setup"
+            })
             .collect()
     }
 }
@@ -262,7 +264,7 @@ async fn handle(State(sh): State<Arc<Shared>>, req: Request<Body>) -> Response<B
 }
 
 fn decide(sh: &Shared, st: &mut State_, rec: &Recorded, path: &str) -> (Canned, Duration) {
-    if path.starts_with("/api/") && path != "/api/health" {
+    if path.starts_with("/api/") && !matches!(path, "/api/health" | "/api/setup") {
         let ok = rec
             .header("authorization")
             .and_then(|v| v.strip_prefix("Bearer "))

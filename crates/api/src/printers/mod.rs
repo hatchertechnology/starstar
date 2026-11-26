@@ -25,6 +25,7 @@ pub(crate) fn client(state: &AppState, printer: &StoredPrinter) -> PrusaLinkClie
 }
 
 pub mod jobs;
+pub mod paths;
 pub mod registry;
 pub mod telemetry;
 pub mod transfer;

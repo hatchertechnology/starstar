@@ -45,6 +45,22 @@ pub enum AuthStoreError {
     SetupClosed,
 }
 
+/// Why a code exchange or refresh failed.
+#[derive(Debug, thiserror::Error)]
+pub enum GrantError {
+    /// The code or token is not usable; the message is safe to show.
+    #[error("{0}")]
+    Invalid(String),
+    #[error(transparent)]
+    Store(#[from] AuthStoreError),
+}
+
+impl From<rusqlite::Error> for GrantError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Store(e.into())
+    }
+}
+
 /// Users, sessions, OAuth clients, grants and tokens.
 pub struct AuthStore {
     pub(crate) db: Db,
@@ -54,6 +70,7 @@ pub struct AuthStore {
     login_limiter: RateLimiter,
     setup_limiter: RateLimiter,
     register_limiter: RateLimiter,
+    token_limiter: RateLimiter,
     pub(crate) pending: codes::PendingMap,
 }
 
@@ -67,6 +84,7 @@ impl AuthStore {
             login_limiter: RateLimiter::new(5, 900),
             setup_limiter: RateLimiter::new(5, 900),
             register_limiter: RateLimiter::new(20, 3600),
+            token_limiter: RateLimiter::new(20, 900),
             pending: codes::PendingMap::default(),
         };
         store.seed_clients()?;
@@ -91,6 +109,11 @@ impl AuthStore {
     /// 20 client registrations per client IP per hour.
     pub fn register_limiter(&self) -> &RateLimiter {
         &self.register_limiter
+    }
+
+    /// 20 failed token requests per client IP per 900 s.
+    pub fn token_limiter(&self) -> &RateLimiter {
+        &self.token_limiter
     }
 
     pub fn clock(&self) -> &Clock {

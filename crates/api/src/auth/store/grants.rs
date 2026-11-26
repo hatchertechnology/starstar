@@ -1,10 +1,10 @@
 //! OAuth grants and the access/refresh tokens issued under them.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use starstar_shared::Role;
 use starstar_shared::auth::{AppGrant, TokenResponse};
 
-use super::{AuthStore, AuthStoreError};
+use super::{AuthStore, AuthStoreError, GrantError};
 use crate::auth::Caller;
 use crate::auth::crypto::{hash_token, random_token};
 
@@ -12,6 +12,8 @@ pub const ACCESS_TTL: i64 = 3600;
 pub const REFRESH_TTL: i64 = 30 * 86400;
 pub const GRANT_TTL: i64 = 90 * 86400;
 pub const LAST_USED_THROTTLE: i64 = 60;
+/// A rotated refresh token may mint one more pair within this window.
+pub const REFRESH_GRACE_SECS: i64 = 30;
 
 /// A freshly minted token pair. The plaintext tokens exist only here.
 /// Not `Debug`.
@@ -157,6 +159,109 @@ impl AuthStore {
         }
         let role = parse_role(&grant_role)?.min(parse_role(&user_role)?);
         Ok(Some(Caller { username, role }))
+    }
+
+    /// Rotates a refresh token into a new pair, in one `IMMEDIATE`
+    /// transaction.
+    ///
+    /// The first use rotates the token. A replay within [`REFRESH_GRACE_SECS`]
+    /// mints one more pair on the same grant (two processes refreshing at
+    /// once both succeed). Any further replay, or one after the window,
+    /// revokes the whole grant. The grant's role is not recalculated here;
+    /// every request caps it by the user's current role.
+    pub fn refresh(
+        &self,
+        refresh_token: &str,
+        client_id: &str,
+    ) -> Result<IssuedTokens, GrantError> {
+        let mut conn = self.db.conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = self.now();
+        let hash = hash_token(refresh_token).to_vec();
+        let row = tx
+            .query_row(
+                "SELECT t.expires_at, t.rotated_at, t.grace_used_at, g.id, g.client_id, g.expires_at, u.disabled
+                 FROM oauth_tokens t
+                 JOIN oauth_grants g ON g.id = t.grant_id
+                 JOIN users u ON u.id = g.user_id
+                 WHERE t.token_hash = ?1 AND t.kind = 'refresh'",
+                params![hash],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Option<i64>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, i64>(5)?,
+                        r.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let invalid = || GrantError::Invalid("invalid refresh token".to_owned());
+        let Some((expires_at, rotated_at, grace_used_at, grant_id, g_client, g_expires, disabled)) =
+            row
+        else {
+            return Err(invalid());
+        };
+        if expires_at <= now || g_expires <= now || g_client != client_id || disabled != 0 {
+            return Err(invalid());
+        }
+        match rotated_at {
+            None => {
+                tx.execute(
+                    "UPDATE oauth_tokens SET rotated_at = ?1 WHERE token_hash = ?2",
+                    params![now, hash],
+                )?;
+            }
+            Some(r) if now - r <= REFRESH_GRACE_SECS && grace_used_at.is_none() => {
+                tx.execute(
+                    "UPDATE oauth_tokens SET grace_used_at = ?1 WHERE token_hash = ?2",
+                    params![now, hash],
+                )?;
+            }
+            Some(_) => {
+                tx.execute("DELETE FROM oauth_grants WHERE id = ?1", params![grant_id])?;
+                tx.commit()?;
+                return Err(GrantError::Invalid(
+                    "refresh token reuse detected; the grant was revoked".to_owned(),
+                ));
+            }
+        }
+        let tokens = issue_tokens_in(&tx, now, &grant_id)?;
+        tx.commit()?;
+        Ok(tokens)
+    }
+
+    /// RFC 7009 revocation. Unknown tokens, and tokens of another client than
+    /// `client_id`, are silently ignored. A refresh token deletes its grant;
+    /// an access token only itself.
+    pub fn revoke_token(&self, token: &str, client_id: Option<&str>) -> Result<(), AuthStoreError> {
+        let conn = self.db.conn();
+        let hash = hash_token(token).to_vec();
+        let found = conn
+            .query_row(
+                "SELECT t.kind, g.id, g.client_id FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id WHERE t.token_hash = ?1",
+                params![hash],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+            )
+            .optional()?;
+        let Some((kind, grant_id, g_client)) = found else {
+            return Ok(());
+        };
+        if client_id.is_some_and(|c| c != g_client) {
+            return Ok(());
+        }
+        if kind == "refresh" {
+            conn.execute("DELETE FROM oauth_grants WHERE id = ?1", params![grant_id])?;
+        } else {
+            conn.execute(
+                "DELETE FROM oauth_tokens WHERE token_hash = ?1",
+                params![hash],
+            )?;
+        }
+        Ok(())
     }
 
     /// Unexpired grants with client and user names, newest first. `None`

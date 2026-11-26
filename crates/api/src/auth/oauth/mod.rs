@@ -19,6 +19,7 @@ pub mod authorize;
 pub mod metadata;
 pub mod redirect;
 pub mod register;
+pub mod token;
 
 /// An RFC 6749 error response (JSON body, `no-store`).
 #[derive(Debug)]
@@ -119,4 +120,5 @@ pub fn routes() -> Router<AppState> {
         .merge(authorize::routes())
         .merge(metadata::routes())
         .merge(register::routes())
+        .merge(token::routes())
 }

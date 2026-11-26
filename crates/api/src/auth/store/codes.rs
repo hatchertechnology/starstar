@@ -3,11 +3,13 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use starstar_shared::Role;
 
-use super::{AuthStore, AuthStoreError};
-use crate::auth::crypto::{hash_token, random_token};
+use super::grants::{IssuedTokens, create_grant_in, issue_tokens_in, parse_role};
+use super::users::user_by_id_in;
+use super::{AuthStore, AuthStoreError, GrantError};
+use crate::auth::crypto::{ct_eq, hash_token, is_valid_pkce_verifier, pkce_s256, random_token};
 
 pub const CODE_TTL: i64 = 60;
 pub const PENDING_TTL: i64 = 600;
@@ -131,6 +133,106 @@ impl AuthStore {
             ],
         )?;
         Ok(code)
+    }
+}
+
+impl AuthStore {
+    /// Exchanges an authorization code for tokens, in one `IMMEDIATE`
+    /// transaction so concurrent exchanges of one code produce one success.
+    ///
+    /// A code is burned (marked used) the moment its row is found, before the
+    /// client, redirect and verifier checks: a wrong guess spends the code.
+    /// Presenting a used code revokes the grant it created.
+    pub fn exchange_code(
+        &self,
+        code: &str,
+        client_id: &str,
+        redirect_uri: &str,
+        verifier: &str,
+    ) -> Result<IssuedTokens, GrantError> {
+        let mut conn = self.db.conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = self.now();
+        let invalid = |m: &str| GrantError::Invalid(m.to_owned());
+
+        let row = tx
+            .query_row(
+                "SELECT client_id, user_id, role, redirect_uri, code_challenge, resource, expires_at, used_at, grant_id
+                 FROM oauth_codes WHERE code_hash = ?1",
+                params![hash_token(code).to_vec()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, i64>(6)?,
+                        r.get::<_, Option<i64>>(7)?,
+                        r.get::<_, Option<String>>(8)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            c_client,
+            user_id,
+            role,
+            c_redirect,
+            challenge,
+            resource,
+            expires_at,
+            used_at,
+            grant_id,
+        )) = row
+        else {
+            return Err(invalid("invalid authorization code"));
+        };
+        if expires_at <= now {
+            return Err(invalid("authorization code expired"));
+        }
+        if used_at.is_some() {
+            if let Some(grant_id) = grant_id {
+                tx.execute("DELETE FROM oauth_grants WHERE id = ?1", params![grant_id])?;
+            }
+            tx.commit()?;
+            return Err(invalid("authorization code already used"));
+        }
+        // Burn first; every later failure still commits this.
+        tx.execute(
+            "UPDATE oauth_codes SET used_at = ?1 WHERE code_hash = ?2",
+            params![now, hash_token(code).to_vec()],
+        )?;
+        let failure =
+            |tx: rusqlite::Transaction<'_>, m: &str| -> Result<IssuedTokens, GrantError> {
+                tx.commit()?;
+                Err(GrantError::Invalid(m.to_owned()))
+            };
+
+        if c_client != client_id || c_redirect != redirect_uri {
+            return failure(
+                tx,
+                "client_id or redirect_uri does not match the authorization",
+            );
+        }
+        if !is_valid_pkce_verifier(verifier)
+            || !ct_eq(pkce_s256(verifier).as_bytes(), challenge.as_bytes())
+        {
+            return failure(tx, "code_verifier does not match the code_challenge");
+        }
+        let Some(user) = user_by_id_in(&tx, user_id)?.filter(|u| !u.disabled) else {
+            return failure(tx, "the user is not available");
+        };
+        let role = parse_role(&role)?.min(user.role);
+        let new_grant = create_grant_in(&tx, now, user_id, client_id, role, resource.as_deref())?;
+        tx.execute(
+            "UPDATE oauth_codes SET grant_id = ?1 WHERE code_hash = ?2",
+            params![new_grant, hash_token(code).to_vec()],
+        )?;
+        let tokens = issue_tokens_in(&tx, now, &new_grant)?;
+        tx.commit()?;
+        Ok(tokens)
     }
 }
 

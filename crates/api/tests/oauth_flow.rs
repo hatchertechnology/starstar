@@ -464,3 +464,419 @@ async fn copy_code_page() {
     );
     assert_eq!(get(&app, "/oauth/code?code=x&state=x").await.status, 401);
 }
+
+// ---- token endpoint, refresh and revocation ----
+
+use std::time::Duration;
+
+async fn token(app: &Router, form: &[(&str, &str)]) -> TestResponse {
+    post_form(app, "/oauth/token", form).await
+}
+
+async fn bearer_me(app: &Router, at: &str) -> TestResponse {
+    send(
+        app,
+        Request::get("/api/me")
+            .header("authorization", format!("Bearer {at}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+}
+
+async fn refresh(app: &Router, rt: &str) -> TestResponse {
+    refresh_as(app, rt, "starstar-cli").await
+}
+
+async fn refresh_as(app: &Router, rt: &str, client: &str) -> TestResponse {
+    token(
+        app,
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", rt),
+            ("client_id", client),
+        ],
+    )
+    .await
+}
+
+fn pair(r: &TestResponse) -> (String, String) {
+    let j = r.json();
+    (
+        j["access_token"].as_str().unwrap().to_owned(),
+        j["refresh_token"].as_str().unwrap().to_owned(),
+    )
+}
+
+/// Signs in an admin "kerry", runs the CLI flow and returns (app, state,
+/// browser, access, refresh).
+async fn cli_pair() -> (Router, starstar_api::AppState, Browser, String, String) {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let (verifier, challenge) = pkce();
+    let code = authorize_code(
+        &app,
+        &b,
+        "starstar-cli",
+        CB,
+        &challenge,
+        "starstar:operator",
+        Role::Operator,
+    )
+    .await;
+    let r = token(
+        &app,
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", CB),
+            ("client_id", "starstar-cli"),
+            ("code_verifier", &verifier),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let (at, rt) = pair(&r);
+    (app, state, b, at, rt)
+}
+
+#[tokio::test]
+async fn pkce_flow_end_to_end() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let (verifier, challenge) = pkce();
+    let code = authorize_code(
+        &app,
+        &b,
+        "starstar-cli",
+        CB,
+        &challenge,
+        "starstar:operator",
+        Role::Operator,
+    )
+    .await;
+    let r = token(
+        &app,
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", CB),
+            ("client_id", "starstar-cli"),
+            ("code_verifier", &verifier),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.headers["cache-control"], "no-store");
+    assert_eq!(r.headers["pragma"], "no-cache");
+    let j = r.json();
+    assert_eq!(j["token_type"], "Bearer");
+    assert_eq!(j["expires_in"], 3600);
+    assert_eq!(j["scope"], "starstar:operator");
+    assert!(j["access_token"].as_str().unwrap().starts_with("ss_at_"));
+    assert!(j["refresh_token"].as_str().unwrap().starts_with("ss_rt_"));
+    assert_eq!(
+        bearer_me(&app, j["access_token"].as_str().unwrap())
+            .await
+            .json()["role"],
+        "operator"
+    );
+}
+
+#[tokio::test]
+async fn code_exchange_rejections() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let other = register_client(&state, "http://127.0.0.1:1/cb");
+    let fresh = || async {
+        let (v, c) = pkce();
+        let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
+        (v, code)
+    };
+    let form = |code: &str, redirect: &str, client: &str, verifier: &str| {
+        let f: Vec<(String, String)> = vec![
+            ("grant_type".into(), "authorization_code".into()),
+            ("code".into(), code.into()),
+            ("redirect_uri".into(), redirect.into()),
+            ("client_id".into(), client.into()),
+            ("code_verifier".into(), verifier.into()),
+        ];
+        f
+    };
+    let post = |f: Vec<(String, String)>| {
+        let app = app.clone();
+        async move {
+            let refs: Vec<(&str, &str)> = f.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            token(&app, &refs).await
+        }
+    };
+
+    let (_, code) = fresh().await;
+    let wrong_verifier = "b".repeat(43);
+    let r = post(form(&code, CB, "starstar-cli", &wrong_verifier)).await;
+    assert_eq!(r.status, 400);
+    assert_eq!(r.json()["error"], "invalid_grant");
+
+    let (v, code) = fresh().await;
+    let r = post(form(
+        &code,
+        "http://127.0.0.1:49153/callback",
+        "starstar-cli",
+        &v,
+    ))
+    .await;
+    assert_eq!(r.json()["error"], "invalid_grant");
+
+    let (v, code) = fresh().await;
+    let r = post(form(&code, CB, &other, &v)).await;
+    assert_eq!(r.json()["error"], "invalid_grant");
+
+    let (v, code) = fresh().await;
+    let r = post(form(&code, CB, "ss_cl_unknown", &v)).await;
+    assert_eq!(r.status, 401);
+    assert_eq!(r.json()["error"], "invalid_client");
+
+    let (v, code) = fresh().await;
+    state.auth.clock().advance(61);
+    let r = post(form(&code, CB, "starstar-cli", &v)).await;
+    assert_eq!(r.json()["error"], "invalid_grant");
+
+    let r = token(
+        &app,
+        &[("grant_type", "password"), ("client_id", "starstar-cli")],
+    )
+    .await;
+    assert_eq!(r.json()["error"], "unsupported_grant_type");
+    let r = token(&app, &[("grant_type", "authorization_code")]).await;
+    assert_eq!(r.json()["error"], "invalid_request");
+}
+
+#[tokio::test]
+async fn a_wrong_verifier_burns_the_code() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let (v, c) = pkce();
+    let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
+    let bad = "b".repeat(43);
+    let attempt = |verifier: String| {
+        let (app, code) = (app.clone(), code.clone());
+        async move {
+            token(
+                &app,
+                &[
+                    ("grant_type", "authorization_code"),
+                    ("code", &code),
+                    ("redirect_uri", CB),
+                    ("client_id", "starstar-cli"),
+                    ("code_verifier", &verifier),
+                ],
+            )
+            .await
+        }
+    };
+    assert_eq!(attempt(bad).await.status, 400);
+    // The right verifier no longer works: the code was spent.
+    assert_eq!(attempt(v).await.status, 400);
+}
+
+#[tokio::test]
+async fn code_reuse_revokes_the_grant() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let (v, c) = pkce();
+    let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
+    let form = [
+        ("grant_type", "authorization_code"),
+        ("code", code.as_str()),
+        ("redirect_uri", CB),
+        ("client_id", "starstar-cli"),
+        ("code_verifier", v.as_str()),
+    ];
+    let first = token(&app, &form).await;
+    assert_eq!(first.status, 200);
+    let (at, _) = pair(&first);
+    assert_eq!(bearer_me(&app, &at).await.status, 200);
+    assert_eq!(token(&app, &form).await.json()["error"], "invalid_grant");
+    assert_eq!(bearer_me(&app, &at).await.status, 401);
+}
+
+#[tokio::test]
+async fn concurrent_exchanges_of_one_code_yield_exactly_one_success() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let (v, c) = pkce();
+    let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
+    let form = [
+        ("grant_type", "authorization_code"),
+        ("code", code.as_str()),
+        ("redirect_uri", CB),
+        ("client_id", "starstar-cli"),
+        ("code_verifier", v.as_str()),
+    ];
+    let both = async { tokio::join!(token(&app, &form), token(&app, &form)) };
+    let (a, b2) = tokio::time::timeout(Duration::from_secs(5), both)
+        .await
+        .expect("exchange hung");
+    let ok = [a.status.as_u16(), b2.status.as_u16()]
+        .iter()
+        .filter(|s| **s == 200)
+        .count();
+    assert_eq!(ok, 1);
+}
+
+#[tokio::test]
+async fn refresh_rotates_tokens() {
+    let (app, _, _, at1, rt1) = cli_pair().await;
+    let r = refresh(&app, &rt1).await;
+    assert_eq!(r.status, 200);
+    let (at2, rt2) = pair(&r);
+    assert_ne!(rt1, rt2);
+    assert_eq!(bearer_me(&app, &at2).await.status, 200);
+    assert_eq!(bearer_me(&app, &at1).await.status, 200); // old access token lives until it expires
+    assert_eq!(refresh(&app, &rt2).await.status, 200);
+}
+
+#[tokio::test]
+async fn concurrent_refreshes_both_succeed() {
+    let (app, state, _, _, rt) = cli_pair().await;
+    let both = async { tokio::join!(refresh(&app, &rt), refresh(&app, &rt)) };
+    let (a, b) = tokio::time::timeout(Duration::from_secs(5), both)
+        .await
+        .expect("refresh hung");
+    assert_eq!((a.status.as_u16(), b.status.as_u16()), (200, 200));
+    let (at_a, rt_a) = pair(&a);
+    let (at_b, rt_b) = pair(&b);
+    assert_ne!(at_a, at_b);
+    assert_eq!(bearer_me(&app, &at_a).await.status, 200);
+    assert_eq!(bearer_me(&app, &at_b).await.status, 200);
+    assert_eq!(refresh(&app, &rt_a).await.status, 200);
+    assert_eq!(refresh(&app, &rt_b).await.status, 200);
+    assert_eq!(state.auth.list_grants(None).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn refresh_reuse_within_grace_mints_new_pair() {
+    let (app, state, _, _, rt1) = cli_pair().await;
+    let (at_b, _) = pair(&refresh(&app, &rt1).await);
+    state.auth.clock().advance(30);
+    let c = refresh(&app, &rt1).await;
+    assert_eq!(c.status, 200);
+    let (at_c, _) = pair(&c);
+    assert_ne!(at_b, at_c);
+    assert_eq!(bearer_me(&app, &at_b).await.status, 200);
+    assert_eq!(bearer_me(&app, &at_c).await.status, 200);
+}
+
+#[tokio::test]
+async fn a_second_grace_replay_revokes_the_grant() {
+    let (app, state, _, _, rt1) = cli_pair().await;
+    let (at_b, _) = pair(&refresh(&app, &rt1).await);
+    let (at_c, _) = pair(&refresh(&app, &rt1).await); // the one allowed replay
+    let r = refresh(&app, &rt1).await; // a second replay
+    assert_eq!(r.json()["error"], "invalid_grant");
+    assert_eq!(bearer_me(&app, &at_b).await.status, 401);
+    assert_eq!(bearer_me(&app, &at_c).await.status, 401);
+    assert!(state.auth.list_grants(None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn refresh_reuse_after_grace_revokes_grant() {
+    let (app, state, _, _, rt1) = cli_pair().await;
+    let (at_b, rt_b) = pair(&refresh(&app, &rt1).await);
+    state.auth.clock().advance(31);
+    let r = refresh(&app, &rt1).await;
+    assert_eq!(r.status, 400);
+    assert_eq!(r.json()["error"], "invalid_grant");
+    assert_eq!(bearer_me(&app, &at_b).await.status, 401);
+    assert_eq!(refresh(&app, &rt_b).await.json()["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn refresh_respects_user_state_and_client() {
+    let (app, state, _, _, rt) = cli_pair().await;
+    let other = register_client(&state, "http://127.0.0.1:1/cb");
+    assert_eq!(
+        refresh_as(&app, &rt, &other).await.json()["error"],
+        "invalid_grant"
+    );
+    // The wrong client did not hurt the original one.
+    let (_, rt2) = pair(&refresh(&app, &rt).await);
+    create_user(&state, "second", "pw-second-12", Role::Admin);
+    state.auth.update_user("kerry", None, Some(true)).unwrap();
+    assert_eq!(refresh(&app, &rt2).await.json()["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn refresh_token_expires_after_30_days_unused() {
+    let (app, state, _, _, rt) = cli_pair().await;
+    state.auth.clock().advance(30 * 86400 + 1);
+    assert_eq!(refresh(&app, &rt).await.json()["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn grant_absolute_lifetime_caps_sliding_refresh() {
+    let (app, state, _, _, mut rt) = cli_pair().await;
+    for day in [29, 29, 29] {
+        state.auth.clock().advance(day * 86400);
+        let r = refresh(&app, &rt).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        rt = pair(&r).1;
+    }
+    // 87 days in. Three days and a second later the 90-day grant is over.
+    state.auth.clock().advance(3 * 86400 + 1);
+    assert_eq!(refresh(&app, &rt).await.json()["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn token_endpoint_is_rate_limited() {
+    let (app, state, _, _, rt) = cli_pair().await;
+    for _ in 0..20 {
+        assert_eq!(
+            refresh(&app, "ss_rt_bogus").await.json()["error"],
+            "invalid_grant"
+        );
+    }
+    assert_eq!(refresh(&app, &rt).await.status, 429);
+    state.auth.clock().advance(901);
+    assert_eq!(refresh(&app, &rt).await.status, 200);
+}
+
+#[tokio::test]
+async fn revoke_refresh_kills_grant_and_unknown_is_200() {
+    let (app, state, _, at, rt) = cli_pair().await;
+    let rev = |tok: &str, client: Option<&str>| {
+        let mut f = vec![("token".to_owned(), tok.to_owned())];
+        if let Some(c) = client {
+            f.push(("client_id".to_owned(), c.to_owned()));
+        }
+        let app = app.clone();
+        async move {
+            let refs: Vec<(&str, &str)> = f.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            post_form(&app, "/oauth/revoke", &refs).await
+        }
+    };
+    // Unknown token and another client's id: 200 and nothing happens.
+    assert_eq!(rev("ss_rt_unknown", None).await.status, 200);
+    let other = register_client(&state, "http://127.0.0.1:1/cb");
+    assert_eq!(rev(&rt, Some(&other)).await.status, 200);
+    assert_eq!(bearer_me(&app, &at).await.status, 200);
+    // Revoking an access token kills only it.
+    let (at2, rt2) = pair(&refresh(&app, &rt).await);
+    assert_eq!(rev(&at2, Some("starstar-cli")).await.status, 200);
+    assert_eq!(bearer_me(&app, &at2).await.status, 401);
+    assert_eq!(refresh(&app, &rt2).await.status, 200);
+    // Revoking a refresh token kills the grant.
+    assert_eq!(rev(&rt2, Some("starstar-cli")).await.status, 200);
+    assert_eq!(bearer_me(&app, &at).await.status, 401);
+    assert_eq!(refresh(&app, &rt2).await.json()["error"], "invalid_grant");
+    assert_eq!(
+        post_form(&app, "/oauth/revoke", &[]).await.json()["error"],
+        "invalid_request"
+    );
+}

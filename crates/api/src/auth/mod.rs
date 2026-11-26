@@ -314,6 +314,7 @@ impl From<AuthStoreError> for ApiError {
             | AuthStoreError::LastAdmin
             | AuthStoreError::SetupClosed => Self::Conflict(err.to_string()),
             AuthStoreError::UserNotFound(_) => Self::NotFound(err.to_string()),
+            AuthStoreError::Busy => Self::ServiceUnavailable(err.to_string()),
             _ => Self::Internal("internal error".to_owned()),
         }
     }

@@ -5,7 +5,9 @@
 //! calls `*_in(conn: &Connection, ...)` helpers. A helper never locks, so no
 //! method can deadlock itself, and nothing is held across an `.await`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use tokio::sync::Semaphore;
 
@@ -47,7 +49,13 @@ pub enum AuthStoreError {
     LastAdmin,
     #[error("setup is closed: an admin already exists")]
     SetupClosed,
+    /// No argon2 permit came free in time; the caller should retry shortly.
+    #[error("too many password checks are running, try again shortly")]
+    Busy,
 }
+
+/// How long a request waits for an argon2 permit before it gets a 503.
+pub const ARGON_WAIT: Duration = Duration::from_secs(5);
 
 /// Why a code exchange or refresh failed.
 #[derive(Debug, thiserror::Error)]
@@ -82,6 +90,7 @@ pub struct AuthStore {
     login_ip_limiter: RateLimiter,
     authorize_limiter: RateLimiter,
     argon_permits: Arc<Semaphore>,
+    argon_wait_ms: AtomicU64,
     setup_limiter: RateLimiter,
     register_limiter: RateLimiter,
     token_limiter: RateLimiter,
@@ -99,6 +108,7 @@ impl AuthStore {
             login_ip_limiter: RateLimiter::new(30, 900),
             authorize_limiter: RateLimiter::new(30, 600),
             argon_permits: Arc::new(Semaphore::new(argon_permit_count())),
+            argon_wait_ms: AtomicU64::new(ARGON_WAIT.as_millis() as u64),
             setup_limiter: RateLimiter::new(5, 900),
             register_limiter: RateLimiter::new(20, 3600),
             token_limiter: RateLimiter::new(20, 900),
@@ -138,15 +148,24 @@ impl AuthStore {
         self.argon_permits.clone()
     }
 
+    /// Test hook: how long argon2 work waits for a permit (default
+    /// [`ARGON_WAIT`]) before failing with [`AuthStoreError::Busy`].
+    #[doc(hidden)]
+    pub fn set_argon_wait(&self, wait: Duration) {
+        self.argon_wait_ms
+            .store(wait.as_millis() as u64, Ordering::Relaxed);
+    }
+
     async fn with_argon_permit<T: Send + 'static>(
         &self,
         work: impl FnOnce(Hasher) -> T + Send + 'static,
     ) -> Result<T, AuthStoreError> {
-        let permit = self
-            .argon_permits
-            .clone()
-            .acquire_owned()
+        // Bounded wait: an unbounded queue would let a flood from many
+        // addresses delay every real sign-in without limit.
+        let wait = Duration::from_millis(self.argon_wait_ms.load(Ordering::Relaxed));
+        let permit = tokio::time::timeout(wait, self.argon_permits.clone().acquire_owned())
             .await
+            .map_err(|_| AuthStoreError::Busy)?
             .map_err(|_| AuthStoreError::Corrupt("argon2 limiter closed".to_owned()))?;
         let hasher = self.hasher;
         let result = tokio::task::spawn_blocking(move || {

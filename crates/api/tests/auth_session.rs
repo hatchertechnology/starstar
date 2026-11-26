@@ -259,6 +259,25 @@ async fn argon2_work_waits_for_a_global_permit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn waiting_too_long_for_a_permit_is_a_503_with_retry_after() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    state
+        .auth
+        .set_argon_wait(std::time::Duration::from_millis(100));
+    let held = hold_all_permits(&state).await;
+    let started = std::time::Instant::now();
+    let r = post_login(&app, "kerry", "pw-kerry-123").await;
+    assert_eq!(r.status, 503, "{}", r.body);
+    assert_eq!(r.headers.get("retry-after").unwrap(), "5");
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    drop(held);
+    // The timed-out attempt counted against the limiter, but no password
+    // work ran; with a permit free the same login now succeeds.
+    assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_users_also_wait_for_a_permit() {
     let (app, state) = test_app();
     let held = hold_all_permits(&state).await;

@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::http::header::WWW_AUTHENTICATE;
+use axum::http::header::{RETRY_AFTER, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use starstar_shared::ErrorBody;
@@ -31,6 +31,9 @@ pub enum ApiError {
     PayloadTooLarge(String),
     /// 429: too many attempts (login, setup, token).
     TooManyRequests(String),
+    /// 503 with `Retry-After`: the server is too busy right now (argon2
+    /// permits exhausted).
+    ServiceUnavailable(String),
     /// The printer answered with an error status that is passed on as-is
     /// (404, 409, 403 from PrusaLink). Distinct from [`ApiError::Forbidden`],
     /// which is about the caller's starstar role.
@@ -53,6 +56,7 @@ impl ApiError {
             Self::LengthRequired(_) => StatusCode::LENGTH_REQUIRED,
             Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+            Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Printer(status, _) => *status,
             Self::GatewayTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
@@ -71,6 +75,7 @@ impl ApiError {
             | Self::LengthRequired(m)
             | Self::PayloadTooLarge(m)
             | Self::TooManyRequests(m)
+            | Self::ServiceUnavailable(m)
             | Self::Printer(_, m)
             | Self::GatewayTimeout(m)
             | Self::Upstream(m)
@@ -83,6 +88,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let insufficient = matches!(self, Self::InsufficientRole(_));
+        let busy = matches!(self, Self::ServiceUnavailable(_));
         let body = ErrorBody {
             error: self.message(),
         };
@@ -92,6 +98,11 @@ impl IntoResponse for ApiError {
                 WWW_AUTHENTICATE,
                 HeaderValue::from_static(INSUFFICIENT_SCOPE_CHALLENGE),
             );
+        }
+        if busy {
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, HeaderValue::from_static("5"));
         }
         response
     }

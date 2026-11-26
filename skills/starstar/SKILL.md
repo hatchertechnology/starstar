@@ -11,13 +11,13 @@ starstar is a server plus a CLI (`starstar`) that drives Prusa MK4 and MINI prin
 
 Printers heat and move. A wrong command wastes filament or damages hardware.
 
-- **Printer busy, or no one to ask:** if the printer is not idle, or you cannot get the user's go-ahead (no terminal, unattended, or they only said "just print it" without naming a printer), stop. Do not upload with `--print`, do not stop or pause the running job to make room, and do not add `--yes`. "Just print it" authorises starting a print only on an idle printer you have confirmed; it does not authorise interrupting another job. Report the state and ask.
+- **Printer not idle:** if the printer is not idle (printing, paused, or waiting for the user), stop. Never stop or pause another job to make room, never add `--yes`, and do not upload with `--print`. Report the state and ask the user.
 - Before uploading or printing, run `starstar printer status <name> --json` and `starstar job show <name> --json`. Only continue if the printer is idle (not printing, paused, or waiting for the user) and the right printer name is confirmed.
-- Start a print only when the user has said to print it, on that printer. Uploading without `--print` is the safe default; ask before `files print` or `--print`. If you cannot ask, upload without `--print` (when the printer is idle) and tell the user it is waiting.
+- A print starts only when the user said to print it **and** either named the printer or `starstar printer list` shows exactly one printer. Uploading without `--print` is the safe default; ask before `files print` or `--print`. If the printer is idle but you cannot ask (no terminal, unattended), upload without `--print` and tell the user the file is waiting.
 - Never pass `--yes` to `job stop`, `files rm`, `printer remove`, `user remove` or `update apply` unless the user told you to do that exact action. Without a terminal these commands fail with exit code 5 until `--yes` is given; that failure is the safety net, so do not "fix" it by adding the flag.
 - Never use `files rm --force` (it deletes a non-empty folder and everything in it) without explicit instruction.
 - Agents sign in as **operator**, never admin. `login` defaults to `--role operator`; leave it. Admin is for registering printers, deleting files, camera settings, firmware and users, which the user does themselves.
-- Slice for the right printer: an MK4 file will not run on an MK4S (it checks the model and nozzle), and the MINI needs its own file. starstar registers printers only as `mk4` or `mini`, so run `starstar printer info <name>` to see the real model before choosing the MK4 or MK4S file.
+- Slice for the right printer: an MK4 file will not run on an MK4S (it checks the model and nozzle), and the MINI needs its own file. starstar cannot tell an MK4 from an MK4S: `printer info` shows `kind: mk4` for both. Ask the user which one it is, or rely on their printer naming convention (for example a name or hostname that says MK4S).
 - Do not guess printer names. Run `starstar printer list`.
 
 ## Install the CLI

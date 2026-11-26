@@ -133,7 +133,7 @@ impl StarstarMcp {
     }
 
     #[tool(
-        description = "Deletes a file from printer storage. Set force to delete a file that is being printed.",
+        description = "Deletes a file or folder from printer storage. Set force to delete a folder even if it is not empty.",
         annotations(read_only_hint = false, destructive_hint = true)
     )]
     async fn delete_file(

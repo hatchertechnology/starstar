@@ -63,7 +63,7 @@ pub async fn register_printer(
     client(state, &printer)
         .version()
         .await
-        .map_err(|err| ApiError::Upstream(format!("could not verify printer: {err}")))?;
+        .map_err(|err| with_prefix(ApiError::from(err), "could not verify printer: "))?;
 
     state.store.insert(printer.clone())?;
     Ok(printer.summary())
@@ -75,6 +75,17 @@ pub async fn remove_printer(state: &AppState, caller: &Caller, name: &str) -> Re
         Ok(())
     } else {
         Err(ApiError::NotFound(format!("no printer named `{name}`")))
+    }
+}
+
+/// Prepends `prefix` to the message of an upstream-derived error, keeping its
+/// status mapping (so a timeout stays a 504).
+fn with_prefix(err: ApiError, prefix: &str) -> ApiError {
+    match err {
+        ApiError::Upstream(m) => ApiError::Upstream(format!("{prefix}{m}")),
+        ApiError::GatewayTimeout(m) => ApiError::GatewayTimeout(format!("{prefix}{m}")),
+        ApiError::Printer(status, m) => ApiError::Printer(status, format!("{prefix}{m}")),
+        other => other,
     }
 }
 
@@ -126,4 +137,23 @@ fn validate_registration(req: &RegisterPrinter) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_host;
+
+    #[test]
+    fn valid_host_accepts_bracketed_ipv6_with_or_without_port() {
+        for host in ["[::1]", "[::1]:1", "[fe80::1]", "[fe80::1]:8080"] {
+            assert!(valid_host(host), "{host}");
+        }
+    }
+
+    #[test]
+    fn valid_host_rejects_bare_or_malformed_ipv6() {
+        for host in ["fe80::1", "::1", "[::1", "[::1]:", "[::1]:99999", "[nope]"] {
+            assert!(!valid_host(host), "{host}");
+        }
+    }
 }

@@ -2,6 +2,16 @@
 //!
 //! The endpoints used here are described in `docs/prusalink-openapi.yaml`.
 //! Every endpoint requires HTTP Digest authentication.
+//!
+//! # Known gaps
+//!
+//! - The upload's unauthenticated `HEAD` probe (to collect a digest challenge
+//!   before the streamed `PUT`) is unverified against real firmware; it is only
+//!   exercised against the fake.
+//! - The storage-root URL `/api/v1/files/<storage>/` (with trailing slash) comes
+//!   from the OpenAPI document and the fake, and is likewise unverified.
+//! - Cameras whose ids are `order` or `snap` are unreachable: those path
+//!   segments are shadowed by fixed camera routes.
 
 use std::time::Duration;
 

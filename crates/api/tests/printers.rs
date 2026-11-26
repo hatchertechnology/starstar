@@ -361,7 +361,8 @@ async fn rejects_hosts_with_url_parts() {
 async fn accepts_bracketed_ipv6_hosts() {
     // Validation passes, so the failure is the (unreachable) reachability check.
     let (app, state) = common::test_app();
-    for host in ["[::1]:1", "[::1]"] {
+    // Unroutable ports, so nothing on the machine can answer.
+    for host in ["[::1]:1", "[fe80::1]:1"] {
         let (status, body) = send(
             &app,
             &state,

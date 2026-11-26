@@ -202,7 +202,10 @@ async fn upload_existing_file_is_409() {
 }
 
 #[tokio::test]
-async fn upload_with_wrong_printer_password_is_502() {
+async fn upload_with_wrong_printer_password_fails_before_any_put() {
+    // The storage lookup that precedes the upload already fails with the bad
+    // password, so no PUT is attempted. The hand-signed PUT path is covered by
+    // `client_upload_with_wrong_password_reaches_signed_put` below.
     let api = TestApi::start().await;
     api.add_printer("bad", &api.fake.addr.to_string(), "wrong");
     let r = put(
@@ -216,4 +219,53 @@ async fn upload_with_wrong_printer_password_is_502() {
     let error = r.json()["error"].as_str().unwrap().to_owned();
     assert!(error.contains("stored credentials"));
     assert!(!error.contains("wrong"));
+    assert!(
+        api.fake.requests().iter().all(|r| r.method != Method::PUT),
+        "no PUT should have reached the printer"
+    );
+}
+
+#[tokio::test]
+async fn client_upload_with_wrong_password_reaches_signed_put() {
+    use starstar_api::prusalink::{PrusaError, PrusaLinkClient};
+
+    let api = TestApi::start().await;
+    let client = PrusaLinkClient::new(
+        reqwest::Client::new(),
+        &api.fake.addr.to_string(),
+        "maker",
+        "wrong",
+    );
+    let err = client
+        .upload(
+            "usb",
+            &["a.bgcode".to_owned()],
+            3,
+            reqwest::Body::from("abc"),
+            false,
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, PrusaError::Status { status, .. } if *status == StatusCode::UNAUTHORIZED),
+        "{err}"
+    );
+    assert!(!err.to_string().contains("wrong"));
+
+    let puts: Vec<_> = api
+        .fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == Method::PUT)
+        .collect();
+    assert_eq!(puts.len(), 1, "exactly one PUT");
+    assert!(!puts[0].authorized, "the fake rejects the bad signature");
+    let auth = puts[0]
+        .headers
+        .get("authorization")
+        .expect("the PUT carries a hand-signed Authorization header")
+        .to_str()
+        .unwrap();
+    assert!(auth.starts_with("Digest "), "{auth}");
 }

@@ -90,3 +90,53 @@ async fn unreachable_printer_is_502() {
     );
     assert!(started.elapsed() < Duration::from_secs(2));
 }
+
+fn register_body(name: &str, host: &str, password: &str) -> serde_json::Value {
+    json!({
+        "name": name,
+        "kind": "mk4",
+        "host": host,
+        "username": fake_prusalink::USERNAME,
+        "password": password,
+    })
+}
+
+#[tokio::test]
+async fn registering_with_wrong_password_uses_the_standard_credentials_message() {
+    let api = TestApi::start().await;
+    let r = api
+        .send_json(
+            Role::Admin,
+            Method::POST,
+            "/api/printers",
+            register_body("new", &api.fake.addr.to_string(), "wrong"),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{}", r.text());
+    let error = r.json()["error"].as_str().unwrap().to_owned();
+    assert!(error.starts_with("could not verify printer: "), "{error}");
+    assert!(error.contains("rejected the stored credentials"), "{error}");
+    assert!(!error.contains("wrong"));
+}
+
+#[tokio::test]
+async fn registering_with_a_slow_printer_is_504() {
+    let api = TestApi::start_with(Config {
+        printer_timeout: Duration::from_millis(300),
+        ..Config::default()
+    })
+    .await;
+    api.fake.set_delay(Duration::from_secs(2));
+    let r = api
+        .send_json(
+            Role::Admin,
+            Method::POST,
+            "/api/printers",
+            register_body("new", &api.fake.addr.to_string(), fake_prusalink::PASSWORD),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::GATEWAY_TIMEOUT, "{}", r.text());
+    let error = r.json()["error"].as_str().unwrap().to_owned();
+    assert!(error.starts_with("could not verify printer: "), "{error}");
+    assert!(error.contains("in time"), "{error}");
+}

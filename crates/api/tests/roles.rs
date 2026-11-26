@@ -300,7 +300,7 @@ async fn operations_enforce_roles() {
         if spec > Role::Viewer {
             let result = call(api.state.clone(), caller(one_below(spec))).await;
             assert!(
-                matches!(result, Err(ApiError::Forbidden(_))),
+                matches!(result, Err(ApiError::InsufficientRole(_))),
                 "{name} accepted a caller below {spec}"
             );
             assert!(
@@ -311,7 +311,7 @@ async fn operations_enforce_roles() {
 
         let result = call(api.state.clone(), caller(spec)).await;
         assert!(
-            !matches!(result, Err(ApiError::Forbidden(_))),
+            !matches!(result, Err(ApiError::InsufficientRole(_))),
             "{name} refused a caller with exactly {spec}"
         );
     }
@@ -547,7 +547,6 @@ async fn every_route_maps_upstream_errors() {
 }
 
 #[tokio::test]
-#[ignore = "enabled when auth lands"]
 async fn every_route_requires_credentials() {
     let api = TestApi::start().await;
     for (method, uri, _) in routes() {
@@ -557,7 +556,6 @@ async fn every_route_requires_credentials() {
 }
 
 #[tokio::test]
-#[ignore = "enabled when auth lands"]
 async fn every_route_rejects_the_role_below_its_minimum() {
     let api = TestApi::start().await;
     for (method, uri, min) in routes() {

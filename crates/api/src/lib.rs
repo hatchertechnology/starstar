@@ -24,10 +24,17 @@ pub struct AppState {
     pub store: Arc<PrinterStore>,
     pub http: reqwest::Client,
     pub config: Arc<Config>,
-    // auth part adds: pub auth: Arc<auth::AuthStore>,
+    pub auth: Arc<auth::AuthStore>,
 }
 
 /// Builds the API router for the given state.
 pub fn router(state: AppState) -> Router {
-    routes::router(state.clone()).merge(auth::router(state))
+    // require_auth must stay the outermost auth layer, after every merge (mcp, web).
+    routes::router(state.clone())
+        .merge(auth::router(state.clone()))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            auth::require_auth,
+        ))
+        .layer(axum::middleware::from_fn(auth::security_headers))
 }

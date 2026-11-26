@@ -3,10 +3,11 @@
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use rusqlite::types::Type;
-use rusqlite::{Connection, ErrorCode, Row, params};
+use rusqlite::{Connection, ErrorCode, Row, TransactionBehavior, params};
 use starstar_shared::{PrinterKind, PrinterSummary};
 
 use crate::prusalink::PrusaLinkClient;
@@ -48,40 +49,113 @@ pub enum StoreError {
     Database(#[from] rusqlite::Error),
 }
 
-const SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS printers (
+/// Schema migrations. `PRAGMA user_version` holds how many have been applied.
+/// Every statement is `IF NOT EXISTS`, so a database created before versioning
+/// existed (user_version 0, `printers` present) migrates cleanly.
+const MIGRATIONS: &[&str] = &[
+    // 0: printers
+    "CREATE TABLE IF NOT EXISTS printers (
         name     TEXT PRIMARY KEY NOT NULL,
         kind     TEXT NOT NULL,
         host     TEXT NOT NULL,
         username TEXT NOT NULL,
         password TEXT NOT NULL
-    )";
+    );",
+    // 1: auth
+    "CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+        role TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (
+        token_hash BLOB PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        csrf_token TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS oauth_clients (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL,
+        seeded INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS oauth_grants (
+        id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+        role TEXT NOT NULL, resource TEXT, created_at INTEGER NOT NULL,
+        last_used_at INTEGER, expires_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+        token_hash BLOB PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('access','refresh')), created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL, rotated_at INTEGER, grace_used_at INTEGER);
+    CREATE TABLE IF NOT EXISTS oauth_codes (
+        code_hash BLOB PRIMARY KEY, client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, resource TEXT,
+        expires_at INTEGER NOT NULL, used_at INTEGER, grant_id TEXT);",
+];
 
-/// Printers registered with the API, stored in a SQLite database.
-///
-/// The database holds passwords, so on Unix it is created with owner-only permissions.
-pub struct PrinterStore {
-    conn: Mutex<Connection>,
+fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    for sql in MIGRATIONS.iter().skip(version as usize) {
+        tx.execute_batch(sql)?;
+    }
+    if (version as usize) < MIGRATIONS.len() {
+        tx.pragma_update(None, "user_version", MIGRATIONS.len() as i64)?;
+    }
+    tx.commit()
 }
 
-impl PrinterStore {
-    /// Opens (creating if needed) the database at `path`.
+/// One SQLite connection shared by the printer registry and the auth tables.
+///
+/// Not `Debug`. Lock it once per operation and never across an `.await`.
+#[derive(Clone)]
+pub struct Db {
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl Db {
+    /// Opens (creating if needed) the database at `path` and migrates it.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref();
         create_private_file(path)?;
         Self::with_connection(Connection::open(path)?)
     }
 
-    /// An empty, non-persistent registry. Useful for tests.
+    /// An empty, non-persistent database with the same pragmas and migrations.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         Self::with_connection(Connection::open_in_memory()?)
     }
 
-    fn with_connection(conn: Connection) -> Result<Self, StoreError> {
-        conn.execute(SCHEMA, [])?;
+    fn with_connection(mut conn: Connection) -> Result<Self, StoreError> {
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        migrate(&mut conn)?;
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// The connection. A poisoned lock is recovered: SQLite state is intact.
+    pub fn conn(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Printers registered with the API, stored in a SQLite database.
+///
+/// The database holds passwords, so on Unix it is created with owner-only permissions.
+pub struct PrinterStore {
+    db: Db,
+}
+
+impl PrinterStore {
+    /// Opens (creating if needed) the database at `path`.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Ok(Self::from_db(Db::open(path)?))
+    }
+
+    /// An empty, non-persistent registry. Useful for tests.
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        Ok(Self::from_db(Db::open_in_memory()?))
+    }
+
+    /// A registry over a connection shared with the auth store.
+    pub fn from_db(db: Db) -> Self {
+        Self { db }
     }
 
     pub fn list(&self) -> Result<Vec<StoredPrinter>, StoreError> {
@@ -138,7 +212,7 @@ impl PrinterStore {
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(PoisonError::into_inner)
+        self.db.conn()
     }
 }
 
@@ -225,6 +299,62 @@ mod tests {
         let mk4 = reopened.get("mk4").unwrap().unwrap();
         assert_eq!(mk4.kind, PrinterKind::Mk4);
         assert_eq!(mk4.password, "secret");
+    }
+
+    #[test]
+    fn migrations_set_user_version_and_are_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.db");
+        let db = Db::open(&p).unwrap();
+        let v: i64 = db
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, MIGRATIONS.len() as i64);
+        drop(db);
+        Db::open(&p).unwrap();
+    }
+
+    #[test]
+    fn migrates_a_version_zero_database_with_printers() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("old.db");
+        {
+            let conn = Connection::open(&p).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute("INSERT INTO printers VALUES ('mk4','mk4','h','u','p')", [])
+                .unwrap();
+        }
+        let db = Db::open(&p).unwrap();
+        let printers = PrinterStore::from_db(db.clone());
+        assert_eq!(printers.list().unwrap().len(), 1);
+        let n: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn in_memory_db_has_foreign_keys_on() {
+        let db = Db::open_in_memory().unwrap();
+        let on: i64 = db
+            .conn()
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(on, 1);
+    }
+
+    #[test]
+    fn printer_store_and_auth_share_one_db() {
+        let db = Db::open_in_memory().unwrap();
+        let printers = PrinterStore::from_db(db.clone());
+        printers.insert(printer("mk4")).unwrap();
+        let n: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM printers", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

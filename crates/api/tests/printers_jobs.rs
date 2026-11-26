@@ -135,7 +135,7 @@ async fn operations_enforce_their_role_without_http() {
     let err = starstar_api::printers::jobs::stop_job(&api.state, &viewer, "mk4", 42)
         .await
         .unwrap_err();
-    assert!(matches!(err, ApiError::Forbidden(_)));
+    assert!(matches!(err, ApiError::InsufficientRole(_)));
     assert!(api.fake.authorized(Method::DELETE).is_empty());
 }
 

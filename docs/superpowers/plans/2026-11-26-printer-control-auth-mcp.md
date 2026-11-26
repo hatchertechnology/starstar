@@ -141,7 +141,7 @@ A Haiku review of this plan found gaps. These changes are already on
 - Refresh grace mints at most one new pair per rotated token. Any further replay revokes the grant. This deliberately replaces spec resolution 5's "same successor pair", which can't be built with hashed tokens.
 - The consent decision endpoint rejects a role above `min(requested, user role)`. Admin needs an explicit `allow_admin: true`.
 - `auth::security_headers` sets `X-Frame-Options: DENY` and `CSP: frame-ancestors 'none'` on every response. The web part must not loosen it.
-- `Config.trusted_proxies` (`STARSTAR_TRUSTED_PROXIES`): `X-Forwarded-For` is honoured only from those peers.
+- `Config.trusted_proxies` (`STARSTAR_TRUSTED_PROXIES`): `X-Forwarded-For` is honoured only from those peers. Unset with a loopback `STARSTAR_BIND` it defaults to `127.0.0.1/32,::1/128`; any explicit value (including a non-loopback list) replaces that default. `check_config` warns when `public_url` is https and the list is empty.
 - A password change revokes all of that user's grants and their other sessions.
 
 ## Review Focus

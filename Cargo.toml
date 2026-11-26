@@ -17,18 +17,25 @@ authors = ["Kerry Hatcher"]
 starstar-shared = { path = "crates/shared" }
 
 
+argon2 = "0.5"
 axum = "0.8"
+base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 diqwest = "3"
 digest_auth = "0.3"
 futures-util = "0.3"
+getrandom = "0.3"
+ipnet = "2"
 md-5 = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.43", features = ["bundled"] }
 serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+url = "2"
 tower = { version = "0.5", features = ["util"] }

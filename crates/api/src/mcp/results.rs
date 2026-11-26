@@ -34,6 +34,14 @@ pub(crate) fn caller_from_ctx(ctx: &RequestContext<RoleServer>) -> Result<Caller
 
 /// A tool-level error: `isError: true`, the HTTP-style status and a message.
 /// Internal errors are not shown to the client.
+///
+/// Only errors raised by our own code take this shape, with
+/// `structuredContent` of `{status, error}`. Arguments that rmcp cannot
+/// deserialize (an unknown enum variant, a missing field) never reach a tool:
+/// in rmcp 3.8 they come back as an `isError: true` tool result whose text is
+/// `failed to deserialize parameters: ...` and which has no
+/// `structuredContent`, not as a JSON-RPC `invalid_params` error. Clients
+/// must not rely on `structuredContent` being present on an error.
 pub(crate) fn tool_error(err: ApiError) -> CallToolResult {
     let status = err.status();
     let message = match err {
@@ -129,4 +137,38 @@ pub(crate) fn decode_upload(content_base64: &str, max: u64) -> Result<Vec<u8>, A
         return Err(upload_too_large(max));
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_errors_do_not_leak_their_message() {
+        let result = tool_error(ApiError::Internal("db path /x".to_owned()));
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result.structured_content,
+            Some(json!({"status": 500, "error": "internal error"}))
+        );
+        let text = serde_json::to_value(&result.content).unwrap();
+        assert_eq!(
+            text[0]["text"],
+            "internal server error (500): internal error"
+        );
+        assert!(!text.to_string().contains("/x"));
+    }
+
+    #[test]
+    fn oversized_base64_is_413_before_it_is_decoded() {
+        // Over the cap (max 3 bytes -> 4 base64 chars) and not valid base64:
+        // the length check must win, so the answer is 413, not 400.
+        let err = decode_upload("!!!!!!!!", 3).unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+        // Whitespace does not count towards the cap.
+        assert_eq!(decode_upload("QUJD\n", 3).unwrap(), b"ABC");
+        // Within the cap, invalid base64 is still a 400.
+        let err = decode_upload("!!!!", 3).unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
 }

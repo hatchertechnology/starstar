@@ -528,3 +528,23 @@ async fn end_to_end_initialize_and_tools_call_over_tcp() {
             .any(|r| r.uri == "/api/v1/job/42/pause")
     );
 }
+
+#[tokio::test]
+async fn body_over_the_limit_is_413() {
+    // 1000 bytes -> 1336 base64 chars; limit = 1336 + 83 + 64 KiB.
+    let limit = 1336 + 1336 / 16 + 64 * 1024;
+    let api = TestApi::start_with(Config {
+        mcp_max_upload_bytes: 1000,
+        ..Config::default()
+    })
+    .await;
+    let t = token(&api, Role::Viewer);
+    let padded = |len: usize| {
+        let base = rpc_body("tools/list", json!({"pad": ""})).to_string().len();
+        rpc_body("tools/list", json!({"pad": "a".repeat(len - base)}))
+    };
+    let ok = post_mcp(&api, Some(&t), HOST, padded(limit)).await;
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    let r = post_mcp(&api, Some(&t), HOST, padded(limit + 1)).await;
+    assert_eq!(r.status, 413, "{}", r.text());
+}

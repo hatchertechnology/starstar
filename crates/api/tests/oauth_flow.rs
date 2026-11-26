@@ -900,7 +900,7 @@ async fn code_reuse_revokes_the_grant() {
     assert_eq!(bearer_me(&app, &at).await.status, 401);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_exchanges_of_one_code_yield_exactly_one_success() {
     let (app, state) = test_app();
     create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
@@ -914,10 +914,24 @@ async fn concurrent_exchanges_of_one_code_yield_exactly_one_success() {
         ("client_id", "starstar-cli"),
         ("code_verifier", v.as_str()),
     ];
-    let both = async { tokio::join!(token(&app, &form), token(&app, &form)) };
+    // Separate tasks, so the two exchanges really run on different threads.
+    let spawn_exchange = || {
+        let app = app.clone();
+        let form: Vec<(String, String)> = form
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        tokio::spawn(async move {
+            let form: Vec<(&str, &str)> =
+                form.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            token(&app, &form).await
+        })
+    };
+    let both = async { tokio::join!(spawn_exchange(), spawn_exchange()) };
     let (a, b2) = tokio::time::timeout(Duration::from_secs(5), both)
         .await
         .expect("exchange hung");
+    let (a, b2) = (a.unwrap(), b2.unwrap());
     let ok = [a.status.as_u16(), b2.status.as_u16()]
         .iter()
         .filter(|s| **s == 200)
@@ -937,13 +951,18 @@ async fn refresh_rotates_tokens() {
     assert_eq!(refresh(&app, &rt2).await.status, 200);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_refreshes_both_succeed() {
     let (app, state, _, _, rt) = cli_pair().await;
-    let both = async { tokio::join!(refresh(&app, &rt), refresh(&app, &rt)) };
+    let spawn_refresh = || {
+        let (app, rt) = (app.clone(), rt.clone());
+        tokio::spawn(async move { refresh(&app, &rt).await })
+    };
+    let both = async { tokio::join!(spawn_refresh(), spawn_refresh()) };
     let (a, b) = tokio::time::timeout(Duration::from_secs(5), both)
         .await
         .expect("refresh hung");
+    let (a, b) = (a.unwrap(), b.unwrap());
     assert_eq!((a.status.as_u16(), b.status.as_u16()), (200, 200));
     let (at_a, rt_a) = pair(&a);
     let (at_b, rt_b) = pair(&b);

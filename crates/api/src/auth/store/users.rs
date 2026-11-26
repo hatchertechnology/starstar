@@ -240,8 +240,19 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn last_enabled_admin_is_guarded() {
+    #[tokio::test]
+    async fn last_enabled_admin_is_guarded() {
+        // A guard that deadlocks must fail the test, not hang it.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::task::spawn_blocking(last_enabled_admin_is_guarded_body),
+        )
+        .await
+        .expect("last-admin guard hung")
+        .unwrap();
+    }
+
+    fn last_enabled_admin_is_guarded_body() {
         let s = store();
         s.create_user("a", "h", Role::Admin).unwrap();
         s.create_user("v", "h", Role::Viewer).unwrap();

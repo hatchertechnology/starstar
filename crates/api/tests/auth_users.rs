@@ -83,6 +83,13 @@ async fn admin_manages_users() {
 
 #[tokio::test]
 async fn last_admin_guard_via_api() {
+    // A guard that deadlocks must fail the test, not hang it.
+    tokio::time::timeout(std::time::Duration::from_secs(10), last_admin_guard())
+        .await
+        .expect("last-admin guard hung");
+}
+
+async fn last_admin_guard() {
     let (app, state) = test_app();
     let root = token_for(&state, "root", Role::Admin);
     let call = |m: &'static str, body: Option<Value>| {

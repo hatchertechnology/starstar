@@ -24,7 +24,7 @@ fn build(config: &Config, name: &str, value: &str, max_age: i64, http_only: bool
         cookie.push_str("; HttpOnly");
     }
     cookie.push_str(&format!("; SameSite=Lax; Max-Age={max_age}"));
-    if config.public_url.starts_with("https://") {
+    if url::Url::parse(&config.public_url).is_ok_and(|u| u.scheme() == "https") {
         cookie.push_str("; Secure");
     }
     HeaderValue::from_str(&cookie).expect("cookie values are visible ASCII")
@@ -82,6 +82,17 @@ mod tests {
         for c in session_cookies(&http, &new_session()) {
             assert!(!c.to_str().unwrap().contains("Secure"));
         }
+        for c in session_cookies(&https, &new_session()) {
+            assert!(c.to_str().unwrap().contains("; Secure"));
+        }
+    }
+
+    #[test]
+    fn secure_ignores_the_case_of_the_scheme() {
+        let https = Config {
+            public_url: "HTTPS://print.example.com".into(),
+            ..Config::default()
+        };
         for c in session_cookies(&https, &new_session()) {
             assert!(c.to_str().unwrap().contains("; Secure"));
         }

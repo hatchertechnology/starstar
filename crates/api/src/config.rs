@@ -39,6 +39,16 @@ pub struct Config {
     pub invalid_trusted_proxies: Vec<String>,
 }
 
+/// Canonical form of the public URL, used for the issuer, redirects and
+/// comparisons: lowercase scheme and host, no default port, no trailing slash.
+/// Input that is not a URL is only trimmed; `check_config` rejects it.
+pub fn normalize_public_url(raw: &str) -> String {
+    match url::Url::parse(raw.trim()) {
+        Ok(url) => url.as_str().trim_end_matches('/').to_owned(),
+        Err(_) => raw.trim().trim_end_matches('/').to_owned(),
+    }
+}
+
 /// Splits a `STARSTAR_TRUSTED_PROXIES` value into valid networks and invalid
 /// entries. A bare IP address is a /32 or /128.
 pub fn parse_trusted_proxies(value: &str) -> (Vec<IpNet>, Vec<String>) {
@@ -77,7 +87,7 @@ impl Config {
             database: var("STARSTAR_DATABASE").unwrap_or(defaults.database),
             bind: var("STARSTAR_BIND").unwrap_or(defaults.bind),
             public_url: var("STARSTAR_PUBLIC_URL")
-                .map(|u| u.trim_end_matches('/').to_owned())
+                .map(|u| normalize_public_url(&u))
                 .unwrap_or(defaults.public_url),
             allow_insecure_http: var("STARSTAR_ALLOW_INSECURE_HTTP").is_some_and(|v| v == "1"),
             setup_token: var("STARSTAR_SETUP_TOKEN"),
@@ -110,6 +120,23 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_url_is_normalized_once() {
+        assert_eq!(
+            normalize_public_url("HTTPS://Print.Example.com/"),
+            "https://print.example.com"
+        );
+        assert_eq!(
+            normalize_public_url("https://print.example.com:443"),
+            "https://print.example.com"
+        );
+        assert_eq!(
+            normalize_public_url("http://127.0.0.1:8080/"),
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(normalize_public_url("not a url/"), "not a url");
+    }
 
     #[test]
     fn bare_ips_become_host_networks() {

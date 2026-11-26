@@ -1,0 +1,67 @@
+/* Design tokens. Light is the default; dark follows prefers-color-scheme. */
+:root {
+  --board: oklch(95% 0.012 235);
+  --tool: oklch(99.4% 0.004 235);
+  --ink: oklch(24% 0.025 255);
+  --ink-soft: oklch(40% 0.025 255);
+  --outline: oklch(24% 0.025 255);
+  --hairline: oklch(85% 0.012 240);
+  --bar: oklch(40% 0.12 258);
+  --bar-ink: oklch(99% 0.004 235);
+  --peg: 24px;
+  --peg-dot: oklch(86% 0.014 238);
+
+  --st-active: oklch(60% 0.15 150);
+  --st-active-ink: oklch(32% 0.09 150);
+  --st-hold: oklch(80% 0.15 80);
+  --st-hold-ink: oklch(24% 0.025 255);
+  --st-fault: oklch(55% 0.2 27);
+  --st-fault-ink: oklch(45% 0.19 27);
+  --danger: oklch(55% 0.2 27);
+  --danger-ink: oklch(99% 0.004 235);
+
+  --font: 'Atkinson Hyperlegible Next', system-ui, sans-serif;
+  --step--1: 0.833rem;
+  --step-0: 1rem;
+  --step-1: 1.2rem;
+  --step-2: 1.44rem;
+  --step-3: 1.728rem;
+  --lh-text: 1.4;
+  --lh-readout: 1.1;
+
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s7: 28px;
+  --s8: 32px;
+  --radius: 6px;
+  --edge: 2px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 150ms;
+  --t-state: 180ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --board: oklch(22% 0.02 255);
+    --tool: oklch(27% 0.02 255);
+    --ink: oklch(96% 0.01 240);
+    --ink-soft: oklch(78% 0.02 240);
+    --outline: oklch(80% 0.02 240);
+    --hairline: oklch(40% 0.02 250);
+    --bar: oklch(33% 0.1 258);
+    --peg-dot: oklch(32% 0.02 255);
+
+    --st-active: oklch(72% 0.16 150);
+    --st-active-ink: oklch(84% 0.14 150);
+    --st-hold: oklch(80% 0.15 80);
+    --st-hold-ink: oklch(24% 0.025 255);
+    --st-fault: oklch(66% 0.19 27);
+    --st-fault-ink: oklch(78% 0.14 27);
+    --danger: oklch(60% 0.2 27);
+  }
+}

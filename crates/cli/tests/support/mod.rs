@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::json;
 use starstar_cli::credentials::{CredentialStore, StoredToken, server_key};
 use starstar_cli::oauth::Pkce;
-use starstar_shared::auth::{TokenResponse, WhoAmI};
+use starstar_shared::auth::{AppGrant, TokenResponse, UserSummary, WhoAmI};
 use starstar_shared::{
     Camera, CameraDetail, FileEntry, FileKind, Health, Job, JobFile, PrintMeta, PrinterInfo,
     PrinterKind, PrinterStatus, PrinterSummary, Resolution, Role, StorageDevice, Transfer,
@@ -290,7 +290,7 @@ fn decide(sh: &Shared, st: &mut State_, rec: &Recorded, path: &str) -> (Canned, 
     if let Some(r) = oauth(sh, st, rec, path) {
         return r;
     }
-    (defaults(&rec.method, path), Duration::ZERO)
+    (defaults(rec, path), Duration::ZERO)
 }
 
 fn form(rec: &Recorded) -> HashMap<String, String> {
@@ -457,8 +457,8 @@ fn oauth(sh: &Shared, st: &mut State_, rec: &Recorded, path: &str) -> Option<(Ca
     }
 }
 
-fn defaults(method: &str, path: &str) -> Canned {
-    match (method, path) {
+fn defaults(rec: &Recorded, path: &str) -> Canned {
+    match (rec.method.as_str(), path) {
         ("GET", "/api/health") => Canned::json(200, Health::ok()),
         ("GET", "/api/me") => Canned::json(
             200,
@@ -566,6 +566,38 @@ fn defaults(method: &str, path: &str) -> Canned {
             },
         ),
         ("POST", "/api/printers/mk4/update/prusalink") => Canned::empty(204),
+        ("GET", "/api/users") => Canned::json(
+            200,
+            vec![user("kerry", Role::Admin), user("op", Role::Operator)],
+        ),
+        ("POST", "/api/users") => {
+            let b = rec.json();
+            Canned::json(
+                201,
+                user(
+                    b["username"].as_str().unwrap_or("?"),
+                    b["role"].as_str().unwrap_or("viewer").parse().unwrap(),
+                ),
+            )
+        }
+        ("PATCH", "/api/users/op") => Canned::json(200, user("op", Role::Viewer)),
+        ("DELETE", p) if p.starts_with("/api/users/") => Canned::empty(204),
+        ("PUT", "/api/me/password") => Canned::empty(204),
+        ("GET", "/api/apps") => Canned::json(
+            200,
+            vec![AppGrant {
+                id: "ss_gr_1".into(),
+                client_id: "starstar-cli".into(),
+                client_name: "starstar CLI".into(),
+                username: "kerry".into(),
+                role: Role::Operator,
+                resource: None,
+                created_at: 1_800_000_000,
+                last_used_at: Some(1_800_000_000),
+                expires_at: 1_807_776_000,
+            }],
+        ),
+        ("DELETE", "/api/apps/ss_gr_1") => Canned::empty(204),
         ("POST", "/api/printers") => Canned::json(201, mk4_summary()),
         ("DELETE", "/api/printers/mk4") => Canned::empty(204),
         ("GET", "/api/printers/mk4") => Canned::json(200, mk4_summary()),
@@ -606,6 +638,15 @@ fn defaults(method: &str, path: &str) -> Canned {
             }],
         ),
         _ => Canned::json(404, json!({"error": "not found"})),
+    }
+}
+
+pub fn user(name: &str, role: Role) -> UserSummary {
+    UserSummary {
+        username: name.into(),
+        role,
+        disabled: false,
+        created_at: 1_800_000_000,
     }
 }
 

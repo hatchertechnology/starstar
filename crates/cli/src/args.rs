@@ -69,6 +69,12 @@ pub enum Command {
     /// Check for and apply printer firmware updates.
     #[command(subcommand)]
     Update(UpdateCommand),
+    /// Manage users (admin) and your own password.
+    #[command(subcommand)]
+    User(UserCommand),
+    /// List and revoke connected apps (OAuth sign-ins).
+    #[command(subcommand)]
+    Apps(AppsCommand),
     /// List and inspect printers.
     #[command(subcommand)]
     Printer(PrinterCommand),
@@ -425,5 +431,72 @@ pub enum UpdateCommand {
         /// Confirm the update. Required.
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+}
+
+fn parse_role(s: &str) -> Result<Role, starstar_shared::UnknownRole> {
+    s.parse()
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UserCommand {
+    /// Create a user.
+    Add {
+        /// New username: lowercase letters, digits, '.', '_' or '-'.
+        username: String,
+        /// Role: viewer, operator or admin.
+        #[arg(long, value_parser = parse_role)]
+        role: Role,
+        /// Read the password from stdin (one line) instead of prompting.
+        #[arg(long)]
+        password_stdin: bool,
+    },
+    /// List users.
+    List,
+    /// Change a user's role.
+    SetRole {
+        /// Username.
+        username: String,
+        /// New role: viewer, operator or admin.
+        #[arg(value_parser = parse_role)]
+        role: Role,
+    },
+    /// Disable a user so they cannot sign in.
+    Disable {
+        /// Username.
+        username: String,
+    },
+    /// Enable a disabled user.
+    Enable {
+        /// Username.
+        username: String,
+    },
+    /// Delete a user. Needs --yes without a terminal.
+    Remove {
+        /// Username.
+        username: String,
+        #[command(flatten)]
+        confirm: ConfirmArgs,
+    },
+    /// Change your own password. This signs out all your other sessions and apps.
+    Passwd {
+        /// Read the current and then the new password from stdin (two lines).
+        #[arg(long)]
+        password_stdin: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AppsCommand {
+    /// List connected apps.
+    List {
+        /// Show everyone's apps (admin only).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Revoke a connected app's access.
+    Revoke {
+        /// App id, from `apps list`.
+        id: String,
     },
 }

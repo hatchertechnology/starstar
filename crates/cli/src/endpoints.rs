@@ -238,6 +238,38 @@ pub fn update_apply(printer: &str, env: &str) -> Endpoint {
     printer_at(Method::POST, printer, &["update", env])
 }
 
+pub fn users() -> Endpoint {
+    Endpoint::new(Method::GET, &["api", "users"])
+}
+
+pub fn add_user() -> Endpoint {
+    Endpoint::new(Method::POST, &["api", "users"])
+}
+
+pub fn update_user(name: &str) -> Endpoint {
+    Endpoint::new(Method::PATCH, &["api", "users", name])
+}
+
+pub fn remove_user(name: &str) -> Endpoint {
+    Endpoint::new(Method::DELETE, &["api", "users", name])
+}
+
+pub fn my_password() -> Endpoint {
+    Endpoint::new(Method::PUT, &["api", "me", "password"])
+}
+
+pub fn apps(all: bool) -> Endpoint {
+    let mut ep = Endpoint::new(Method::GET, &["api", "apps"]);
+    if all {
+        ep.query.push(("all", "true".into()));
+    }
+    ep
+}
+
+pub fn revoke_app(id: &str) -> Endpoint {
+    Endpoint::new(Method::DELETE, &["api", "apps", id])
+}
+
 /// A place on a printer's storage: `<storage>[/<path…>]`. Segments are kept
 /// apart so each one is encoded on its own and never interpreted as a path.
 #[derive(Debug, Clone, PartialEq, Eq)]

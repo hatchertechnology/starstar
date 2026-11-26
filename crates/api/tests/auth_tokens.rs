@@ -30,14 +30,19 @@ async fn me_with_valid_token() {
 #[tokio::test]
 async fn missing_or_bad_token_is_401_with_resource_metadata() {
     let (app, _) = test_app();
-    for token in [None, Some("ss_at_nope")] {
-        let r = me(&app, token).await;
-        assert_eq!(r.status, 401);
-        assert_eq!(
-            r.headers["www-authenticate"],
-            r#"Bearer resource_metadata="http://127.0.0.1:8080/.well-known/oauth-protected-resource""#
-        );
-    }
+    let r = me(&app, None).await;
+    assert_eq!(r.status, 401);
+    assert_eq!(
+        r.headers["www-authenticate"],
+        r#"Bearer resource_metadata="http://127.0.0.1:8080/.well-known/oauth-protected-resource""#
+    );
+    // A token was sent and rejected: RFC 6750 section 3 adds the error code.
+    let r = me(&app, Some("ss_at_nope")).await;
+    assert_eq!(r.status, 401);
+    assert_eq!(
+        r.headers["www-authenticate"],
+        r#"Bearer error="invalid_token", resource_metadata="http://127.0.0.1:8080/.well-known/oauth-protected-resource""#
+    );
     let r = send(
         &app,
         Request::get("/api/me")
@@ -47,6 +52,39 @@ async fn missing_or_bad_token_is_401_with_resource_metadata() {
     )
     .await;
     assert_eq!(r.status, 401);
+}
+
+#[tokio::test]
+async fn too_low_a_role_is_403_with_an_insufficient_scope_challenge() {
+    let (app, state) = test_app();
+    let viewer = token_for(&state, "v", Role::Viewer);
+    let req = |path: &str| {
+        Request::get(path)
+            .header("authorization", format!("Bearer {viewer}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let r = send(&app, req("/api/users")).await;
+    assert_eq!(r.status, 403);
+    assert_eq!(
+        r.headers["www-authenticate"],
+        r#"Bearer error="insufficient_scope", resource_metadata="http://127.0.0.1:8080/.well-known/oauth-protected-resource""#
+    );
+    // A 403 that is not about the role carries no challenge.
+    let r = send(
+        &app,
+        Request::put("/api/me/password")
+            .header("authorization", format!("Bearer {viewer}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"current_password": "wrong-one", "new_password": "another-pass-1"})
+                    .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, 403);
+    assert!(r.headers.get("www-authenticate").is_none());
 }
 
 #[tokio::test]

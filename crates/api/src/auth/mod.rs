@@ -58,7 +58,7 @@ impl Caller {
         if self.role >= min {
             Ok(())
         } else {
-            Err(ApiError::Forbidden(format!(
+            Err(ApiError::InsufficientRole(format!(
                 "this action needs the {min} role, you have {}",
                 self.role
             )))
@@ -168,21 +168,52 @@ fn is_guarded(path: &str) -> bool {
     path == "/api" || path.starts_with("/api/") || path == "/mcp" || path.starts_with("/mcp/")
 }
 
-fn with_challenge(mut response: Response, state: &AppState, path: &str) -> Response {
-    if response.status() == StatusCode::UNAUTHORIZED
-        && !response.headers().contains_key(header::WWW_AUTHENTICATE)
-    {
-        let value = format!(
-            "Bearer resource_metadata=\"{}\"",
-            protected_resource_metadata_url(state, path)
-        );
-        if let Ok(value) = HeaderValue::from_str(&value) {
-            response
-                .headers_mut()
-                .insert(header::WWW_AUTHENTICATE, value);
+/// Adds the `WWW-Authenticate` challenge to 401 responses (with
+/// `error="invalid_token"` when the request carried a bearer token that was
+/// rejected) and completes the `insufficient_scope` challenge on role 403s.
+fn with_challenge(
+    mut response: Response,
+    state: &AppState,
+    path: &str,
+    invalid_token: bool,
+) -> Response {
+    let metadata = protected_resource_metadata_url(state, path);
+    let challenge = match response.status() {
+        StatusCode::UNAUTHORIZED if !response.headers().contains_key(header::WWW_AUTHENTICATE) => {
+            if invalid_token {
+                format!("Bearer error=\"invalid_token\", resource_metadata=\"{metadata}\"")
+            } else {
+                format!("Bearer resource_metadata=\"{metadata}\"")
+            }
         }
+        StatusCode::FORBIDDEN
+            if response
+                .headers()
+                .get(header::WWW_AUTHENTICATE)
+                .is_some_and(|v| v == crate::error::INSUFFICIENT_SCOPE_CHALLENGE) =>
+        {
+            format!(
+                "{}, resource_metadata=\"{metadata}\"",
+                crate::error::INSUFFICIENT_SCOPE_CHALLENGE
+            )
+        }
+        _ => return response,
+    };
+    if let Ok(value) = HeaderValue::from_str(&challenge) {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
     }
     response
+}
+
+/// Whether the request presented a bearer token (valid or not).
+fn presented_bearer(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split_once(' '))
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
 }
 
 /// Default deny for `/api/*` and `/mcp`: every request must authenticate,
@@ -194,16 +225,17 @@ pub async fn require_auth(State(state): State<AppState>, req: Request, next: Nex
         return next.run(req).await;
     }
     if is_allowlisted(req.method(), &path) {
-        return with_challenge(next.run(req).await, &state, &path);
+        return with_challenge(next.run(req).await, &state, &path, false);
     }
+    let bearer = presented_bearer(req.headers());
     let (mut parts, body) = req.into_parts();
     match authenticate(&mut parts, &state).await {
         Ok(caller) => {
             parts.extensions.insert(caller);
             let req = Request::from_parts(parts, body);
-            with_challenge(next.run(req).await, &state, &path)
+            with_challenge(next.run(req).await, &state, &path, false)
         }
-        Err(err) => with_challenge(err.into_response(), &state, &path),
+        Err(err) => with_challenge(err.into_response(), &state, &path, bearer),
     }
 }
 

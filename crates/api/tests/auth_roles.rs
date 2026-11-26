@@ -69,6 +69,36 @@ async fn every_guarded_route_needs_credentials() {
     }
 }
 
+#[tokio::test]
+async fn aliased_paths_are_guarded_too() {
+    let (app, _) = test_app();
+    for path in [
+        "//api/printers",
+        "///api//printers",
+        "/%61pi/printers",
+        "/%61%70%69/printers",
+        "/api/%70rinters",
+        "/api/./printers",
+        "/x/../api/printers",
+        "/api/%2e/printers",
+        "//mcp",
+        "/%6dcp/anything",
+        "//api/health",
+    ] {
+        let r = send(&app, req("GET", path)).await;
+        assert_eq!(r.status, 401, "{path}");
+        assert!(r.headers.contains_key("www-authenticate"), "{path}");
+    }
+    // Aliases never widen the allowlist: this is not the public health route.
+    let r = send(&app, req("POST", "//api/session")).await;
+    assert_eq!(r.status, 401, "//api/session");
+    // Unrelated paths stay open.
+    let r = send(&app, req("GET", "/.well-known/oauth-authorization-server")).await;
+    assert_eq!(r.status, 200);
+    let r = send(&app, req("GET", "/apiary")).await;
+    assert_ne!(r.status, 401);
+}
+
 fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

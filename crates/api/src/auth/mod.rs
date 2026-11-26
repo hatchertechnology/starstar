@@ -164,8 +164,47 @@ pub fn is_allowlisted(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The path as a router or proxy might see it after normalization: repeated
+/// `/` collapsed, percent-escapes of unreserved characters (letters, digits,
+/// `-`, `.`, `_`, `~`) decoded, and `.` / `..` segments resolved. Other
+/// escapes (such as `%2F`) are left as they are.
+pub fn normalize_path(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+            && (byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+        {
+            decoded.push(byte);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let decoded = String::from_utf8_lossy(&decoded);
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in decoded.split('/').filter(|s| !s.is_empty()) {
+        match segment {
+            "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+    format!("/{}", segments.join("/"))
+}
+
 fn is_guarded(path: &str) -> bool {
-    path == "/api" || path.starts_with("/api/") || path == "/mcp" || path.starts_with("/mcp/")
+    let guarded =
+        |p: &str| p == "/api" || p.starts_with("/api/") || p == "/mcp" || p.starts_with("/mcp/");
+    guarded(path) || guarded(&normalize_path(path))
 }
 
 /// Adds the `WWW-Authenticate` challenge to 401 responses (with
@@ -220,11 +259,14 @@ fn presented_bearer(headers: &axum::http::HeaderMap) -> bool {
 /// except the allowlist. The caller is put into the request extensions.
 /// Anything else (`/oauth/*`, `/.well-known/*`, the web UI) passes through.
 pub async fn require_auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let path = req.uri().path().to_owned();
-    if !is_guarded(&path) {
+    let raw_path = req.uri().path().to_owned();
+    if !is_guarded(&raw_path) {
         return next.run(req).await;
     }
-    if is_allowlisted(req.method(), &path) {
+    // The allowlist matches the raw path exactly; every other decision (guard,
+    // challenge) looks at the normalized one.
+    let path = normalize_path(&raw_path);
+    if is_allowlisted(req.method(), &raw_path) {
         return with_challenge(next.run(req).await, &state, &path, false);
     }
     let bearer = presented_bearer(req.headers());
@@ -273,6 +315,29 @@ impl From<AuthStoreError> for ApiError {
             | AuthStoreError::SetupClosed => Self::Conflict(err.to_string()),
             AuthStoreError::UserNotFound(_) => Self::NotFound(err.to_string()),
             _ => Self::Internal("internal error".to_owned()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_are_normalized() {
+        for (raw, want) in [
+            ("/api/printers", "/api/printers"),
+            ("//api//printers/", "/api/printers"),
+            ("/%61pi/%50rinters", "/api/Printers"),
+            ("/api/%2e%2E/mcp", "/mcp"),
+            ("/a/./b/../c", "/a/c"),
+            ("/api%2Fprinters", "/api%2Fprinters"),
+            ("/%zz/%4", "/%zz/%4"),
+            ("/", "/"),
+            ("", "/"),
+            ("/../..", "/"),
+        ] {
+            assert_eq!(normalize_path(raw), want, "{raw}");
         }
     }
 }

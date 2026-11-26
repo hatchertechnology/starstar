@@ -29,11 +29,21 @@ struct Registration {
 }
 
 /// Trimmed, control characters removed, at most 100 characters.
+/// Unicode general category Cf (format) characters: bidi controls, zero-width
+/// characters, the BOM, soft hyphen and tag characters.
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
 fn sanitize_name(name: Option<&str>) -> String {
     let cleaned: String = name
         .unwrap_or("")
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && !is_format_char(*c))
         .collect();
     let cleaned: String = cleaned.trim().chars().take(100).collect();
     if cleaned.is_empty() {
@@ -113,6 +123,22 @@ async fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bidi_and_format_characters_are_stripped() {
+        assert_eq!(
+            sanitize_name(Some("Good\u{202E}ppA\u{200B}live\u{FEFF}")),
+            "GoodppAlive"
+        );
+        assert_eq!(
+            sanitize_name(Some("a\u{2066}b\u{2069}c\u{061C}d\u{00AD}e")),
+            "abcde"
+        );
+        assert_eq!(sanitize_name(Some("\u{E0041}tag\u{E007F}")), "tag");
+        assert_eq!(sanitize_name(Some("\u{200E}\u{202A}")), "Unnamed app");
+        // Ordinary non-ASCII text survives.
+        assert_eq!(sanitize_name(Some("Café 猫 🐱")), "Café 猫 🐱");
+    }
 
     #[test]
     fn names_are_sanitized() {

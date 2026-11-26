@@ -27,6 +27,7 @@ futures-util = "0.3"
 getrandom = "0.3"
 ipnet = "2"
 md-5 = "0.10"
+rmcp = { version = "~3.8", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }

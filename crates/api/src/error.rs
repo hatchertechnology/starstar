@@ -81,7 +81,36 @@ impl IntoResponse for ApiError {
 
 impl From<PrusaError> for ApiError {
     fn from(err: PrusaError) -> Self {
-        Self::Upstream(err.to_string())
+        let (status, detail) = match &err {
+            PrusaError::Status { status, detail } => (*status, detail.as_deref()),
+            PrusaError::Timeout => {
+                return Self::GatewayTimeout("printer did not respond in time".to_owned());
+            }
+            PrusaError::Transport(_) | PrusaError::Decode(_) => {
+                return Self::Upstream(err.to_string());
+            }
+        };
+        let with_detail = |message: String| match detail {
+            Some(d) => format!("{message}: {d}"),
+            None => message,
+        };
+        match status.as_u16() {
+            404 => Self::Printer(status, with_detail("not found on the printer".to_owned())),
+            409 => Self::Printer(
+                status,
+                with_detail("printer is busy or the target is in use".to_owned()),
+            ),
+            403 => Self::Printer(
+                status,
+                with_detail("printer refused the request".to_owned()),
+            ),
+            408 => Self::GatewayTimeout(with_detail("printer timed out".to_owned())),
+            401 => Self::Upstream(with_detail(
+                "printer rejected the stored credentials".to_owned(),
+            )),
+            503 => Self::Upstream(with_detail("printer service unavailable".to_owned())),
+            other => Self::Upstream(with_detail(format!("printer responded with HTTP {other}"))),
+        }
     }
 }
 

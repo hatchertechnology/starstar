@@ -140,3 +140,62 @@ pub struct UploadOptions {
     #[serde(default)]
     pub print: bool,
 }
+
+/// A camera known to a printer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Camera {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
+    #[serde(default)]
+    pub connected: bool,
+    #[serde(default)]
+    pub detected: bool,
+    #[serde(default)]
+    pub stored: bool,
+    #[serde(default)]
+    pub linked: bool,
+}
+
+/// A camera resolution in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// When a camera takes pictures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerScheme {
+    TenSec,
+    ThirtySec,
+    SixtySec,
+    EachLayer,
+    FifthLayer,
+    Manual,
+}
+
+/// A camera's configuration and capabilities.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_scheme: Option<TriggerScheme>,
+    #[serde(default)]
+    pub available_resolutions: Vec<Resolution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<Resolution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<f64>,
+    /// Lowercase, e.g. `trigger_scheme`.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}

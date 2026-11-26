@@ -6,6 +6,7 @@ use starstar_shared::Health;
 
 use crate::AppState;
 
+mod cameras;
 mod files;
 mod printers;
 
@@ -14,6 +15,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .merge(printers::router())
         .merge(files::router())
+        .merge(cameras::router())
         .with_state(state)
 }
 

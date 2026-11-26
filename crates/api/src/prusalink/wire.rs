@@ -1,7 +1,10 @@
 //! Serde structs matching the JSON that PrusaLink sends and receives.
 
 use serde::Deserialize;
-use starstar_shared::{FileEntry, FileKind, Job, JobFile, PrintMeta, Transfer};
+use starstar_shared::{
+    Camera, CameraDetail, FileEntry, FileKind, Job, JobFile, PrintMeta, Resolution, Transfer,
+    TriggerScheme,
+};
 
 /// `GET /api/version`
 #[derive(Debug, Deserialize)]
@@ -298,4 +301,130 @@ impl From<WireFile> for FileEntry {
             children,
         }
     }
+}
+
+/// `GET /api/v1/cameras` answers a bare array, or `{"camera_list": [...]}`.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum WireCameraList {
+    Bare(Vec<WireCamera>),
+    Wrapped { camera_list: Vec<WireCamera> },
+}
+
+impl WireCameraList {
+    pub fn into_vec(self) -> Vec<WireCamera> {
+        match self {
+            Self::Bare(list) | Self::Wrapped { camera_list: list } => list,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WireCamera {
+    pub camera_id: String,
+    #[serde(default)]
+    pub config: Option<WireCameraInfo>,
+    #[serde(default)]
+    pub connected: bool,
+    #[serde(default)]
+    pub detected: bool,
+    #[serde(default)]
+    pub stored: bool,
+    #[serde(default)]
+    pub linked: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct WireCameraInfo {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub driver: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Usually `"1280x720"`; some firmware sends `{width,height}`.
+    #[serde(default)]
+    pub resolution: Option<serde_json::Value>,
+}
+
+impl From<WireCamera> for Camera {
+    fn from(c: WireCamera) -> Self {
+        let config = c.config.unwrap_or_default();
+        let resolution = config.resolution.and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s),
+            serde_json::Value::Object(o) => {
+                Some(format!("{}x{}", o.get("width")?, o.get("height")?))
+            }
+            _ => None,
+        });
+        Self {
+            id: c.camera_id,
+            name: config.name,
+            driver: config.driver,
+            path: config.path,
+            resolution,
+            connected: c.connected,
+            detected: c.detected,
+            stored: c.stored,
+            linked: c.linked,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WireCameraConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub trigger_scheme: Option<String>,
+    #[serde(default)]
+    pub available_resolutions: Vec<Resolution>,
+    #[serde(default)]
+    pub resolution: Option<Resolution>,
+    #[serde(default)]
+    pub focus: Option<f64>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+impl From<WireCameraConfig> for CameraDetail {
+    fn from(c: WireCameraConfig) -> Self {
+        Self {
+            name: c.name,
+            trigger_scheme: c.trigger_scheme.as_deref().and_then(trigger_from_wire),
+            available_resolutions: c.available_resolutions,
+            resolution: c.resolution,
+            focus: c.focus,
+            capabilities: c
+                .capabilities
+                .into_iter()
+                .map(|s| s.to_lowercase())
+                .collect(),
+        }
+    }
+}
+
+/// PrusaLink spells trigger schemes in SCREAMING_SNAKE_CASE.
+pub fn trigger_to_wire(scheme: TriggerScheme) -> &'static str {
+    match scheme {
+        TriggerScheme::TenSec => "TEN_SEC",
+        TriggerScheme::ThirtySec => "THIRTY_SEC",
+        TriggerScheme::SixtySec => "SIXTY_SEC",
+        TriggerScheme::EachLayer => "EACH_LAYER",
+        TriggerScheme::FifthLayer => "FIFTH_LAYER",
+        TriggerScheme::Manual => "MANUAL",
+    }
+}
+
+/// An unknown value gives `None`.
+pub fn trigger_from_wire(value: &str) -> Option<TriggerScheme> {
+    Some(match value {
+        "TEN_SEC" => TriggerScheme::TenSec,
+        "THIRTY_SEC" => TriggerScheme::ThirtySec,
+        "SIXTY_SEC" => TriggerScheme::SixtySec,
+        "EACH_LAYER" => TriggerScheme::EachLayer,
+        "FIFTH_LAYER" => TriggerScheme::FifthLayer,
+        "MANUAL" => TriggerScheme::Manual,
+        _ => return None,
+    })
 }

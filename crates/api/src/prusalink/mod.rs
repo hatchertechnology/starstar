@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use axum::body::Bytes;
 use diqwest::WithDigestAuth;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
@@ -349,6 +350,43 @@ impl PrusaLinkClient {
         let response = request.send().await.map_err(map_reqwest)?;
         self.check(response).await?;
         Ok(())
+    }
+
+    pub async fn cameras(&self) -> Result<Vec<WireCamera>, PrusaError> {
+        let list: WireCameraList = self.get_json(&["api", "v1", "cameras"]).await?;
+        Ok(list.into_vec())
+    }
+
+    pub async fn camera(&self, id: &str) -> Result<WireCameraConfig, PrusaError> {
+        self.get_json(&["api", "v1", "cameras", id]).await
+    }
+
+    /// A snapshot from the default camera (`None`) or camera `id`. A 204 means
+    /// there is no picture yet. The content type falls back to `image/png`.
+    pub async fn snapshot(&self, id: Option<&str>) -> Result<Option<(String, Bytes)>, PrusaError> {
+        let mut segments = vec!["api", "v1", "cameras"];
+        segments.push(id.unwrap_or("snap"));
+        if id.is_some() {
+            segments.push("snap");
+        }
+        let url = self.endpoint(&segments)?;
+        let response = self.send(Method::GET, url, HeaderMap::new(), None).await?;
+        if response.status() == StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        Ok(Some(Self::image(response).await?))
+    }
+
+    async fn image(response: reqwest::Response) -> Result<(String, Bytes), PrusaError> {
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| v.starts_with("image/"))
+            .unwrap_or("image/png")
+            .to_owned();
+        let bytes = response.bytes().await.map_err(map_reqwest)?;
+        Ok((content_type, bytes))
     }
 
     async fn job_action(

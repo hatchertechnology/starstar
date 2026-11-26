@@ -33,7 +33,6 @@ pub fn file_segments(path: &str) -> Result<Vec<String>, ApiError> {
 
 /// Ensures `storage` is one of the printer's storages, matched against its
 /// `path` with `/` trimmed (`/usb/` is `usb`), and returns that name.
-#[allow(dead_code)] // used by printers::files in the next commit
 pub(crate) async fn resolve_storage(
     client: &PrusaLinkClient,
     storage: &str,

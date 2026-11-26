@@ -237,6 +237,43 @@ impl PrusaLinkClient {
         Ok(())
     }
 
+    fn file_segments<'a>(storage: &'a str, segments: &'a [String]) -> Vec<&'a str> {
+        let mut all = vec!["api", "v1", "files", storage];
+        all.extend(segments.iter().map(String::as_str));
+        if segments.is_empty() {
+            // The storage root has a trailing slash: `/api/v1/files/usb/`.
+            all.push("");
+        }
+        all
+    }
+
+    /// `GET api/v1/files/{storage}/{segments…}`; no segments means the storage root.
+    pub async fn file_info(
+        &self,
+        storage: &str,
+        segments: &[String],
+    ) -> Result<WireFile, PrusaError> {
+        self.get_json(&Self::file_segments(storage, segments)).await
+    }
+
+    /// `HEAD` on a file: its `Read-Only` and `Currently-Printed` headers.
+    pub async fn file_head(
+        &self,
+        storage: &str,
+        segments: &[String],
+    ) -> Result<(bool, bool), PrusaError> {
+        let url = self.endpoint(&Self::file_segments(storage, segments))?;
+        let response = self.send(Method::HEAD, url, HeaderMap::new(), None).await?;
+        let flag = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| matches!(v.trim(), "true" | "?1"))
+        };
+        Ok((flag("read-only"), flag("currently-printed")))
+    }
+
     async fn job_action(
         &self,
         method: Method,

@@ -1,7 +1,7 @@
 //! Serde structs matching the JSON that PrusaLink sends and receives.
 
 use serde::Deserialize;
-use starstar_shared::{Job, JobFile, PrintMeta, Transfer};
+use starstar_shared::{FileEntry, FileKind, Job, JobFile, PrintMeta, Transfer};
 
 /// `GET /api/version`
 #[derive(Debug, Deserialize)]
@@ -239,6 +239,63 @@ impl From<WireTransfer> for Transfer {
             time_remaining: t.time_remaining.and_then(|v| u64::try_from(v).ok()),
             time_transferring: t.time_transferring,
             to_print: t.to_print,
+        }
+    }
+}
+
+/// `GET /api/v1/files/{storage}/{path}`.
+#[derive(Debug, Deserialize)]
+pub struct WireFile {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub m_timestamp: Option<i64>,
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
+    #[serde(default)]
+    pub children: Option<Vec<WireFile>>,
+}
+
+impl From<WireFile> for FileEntry {
+    fn from(f: WireFile) -> Self {
+        let kind = match f.kind.as_str() {
+            "PRINT_FILE" => FileKind::PrintFile,
+            "FIRMWARE" => FileKind::Firmware,
+            "FILE" => FileKind::File,
+            "FOLDER" => FileKind::Folder,
+            _ => FileKind::Other,
+        };
+        // Only print files carry slicer metadata worth showing.
+        let meta = match (kind, f.meta) {
+            (FileKind::PrintFile, Some(value)) => serde_json::from_value::<WireMeta>(value)
+                .ok()
+                .map(PrintMeta::from),
+            _ => None,
+        };
+        let children = (kind == FileKind::Folder).then(|| {
+            f.children
+                .unwrap_or_default()
+                .into_iter()
+                .map(FileEntry::from)
+                .collect()
+        });
+        Self {
+            name: f.name,
+            display_name: f.display_name,
+            kind,
+            read_only: f.read_only,
+            size: f.size,
+            modified: f.m_timestamp,
+            meta,
+            children,
         }
     }
 }

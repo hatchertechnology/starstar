@@ -33,3 +33,5 @@ web/.output/
 web/.nuxt/
 web/.data/
 web/coverage/
+web/dist
+web/.nuxtrc

@@ -1,0 +1,17 @@
+[package]
+name = "starstar-cli"
+description = "Command-line interface for the starstar 3D printer management system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "starstar"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+starstar-api.workspace = true
+starstar-shared.workspace = true

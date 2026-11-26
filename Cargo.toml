@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/shared",
+    "crates/api",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/kerryhatcher/starstar"
+authors = ["Kerry Hatcher"]
+
+[workspace.dependencies]
+starstar-shared = { path = "crates/shared" }
+starstar-api = { path = "crates/api" }
+
+clap = { version = "4", features = ["derive"] }

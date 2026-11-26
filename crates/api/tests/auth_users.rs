@@ -19,6 +19,7 @@ async fn as_role(
     body: Option<Value>,
 ) -> TestResponse {
     let b = authorize(Request::builder().method(method).uri(uri), state, role)
+        .await
         .header("content-type", "application/json");
     let body = body.map_or_else(Body::empty, |v| Body::from(v.to_string()));
     send(app, b.body(body).unwrap()).await
@@ -26,7 +27,7 @@ async fn as_role(
 
 #[tokio::test]
 async fn admin_manages_users() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let a = |m: &'static str, u: &'static str, b: Option<Value>| {
         let (app, state) = (app.clone(), state.clone());
         async move { as_role(&app, &state, Role::Admin, m, u, b).await }
@@ -90,8 +91,8 @@ async fn last_admin_guard_via_api() {
 }
 
 async fn last_admin_guard() {
-    let (app, state) = test_app();
-    let root = token_for(&state, "root", Role::Admin);
+    let (app, state) = test_app().await;
+    let root = token_for(&state, "root", Role::Admin).await;
     let call = |m: &'static str, body: Option<Value>| {
         let req = Request::builder()
             .method(m)
@@ -115,8 +116,8 @@ async fn last_admin_guard() {
 
 #[tokio::test]
 async fn removing_a_user_kills_their_tokens() {
-    let (app, state) = test_app();
-    let v = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    let v = token_for(&state, "v", Role::Viewer).await;
     let r = as_role(&app, &state, Role::Admin, "DELETE", "/api/users/v", None).await;
     assert_eq!(r.status, 204);
     let req = Request::get("/api/me")
@@ -128,8 +129,8 @@ async fn removing_a_user_kills_their_tokens() {
 
 #[tokio::test]
 async fn change_own_password() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let b1 = login(&app, "kerry", "pw-kerry-123").await;
     let b2 = login(&app, "kerry", "pw-kerry-123").await;
     let put = |b: &Browser, body: Value| {
@@ -175,9 +176,9 @@ async fn change_own_password() {
 
 #[tokio::test]
 async fn password_change_revokes_grants_and_other_sessions() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
-    let app_token = token_for(&state, "kerry", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
+    let app_token = token_for(&state, "kerry", Role::Viewer).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let other = login(&app, "kerry", "pw-kerry-123").await;
     let body = json!({"current_password":"pw-kerry-123","new_password":"new-pw-12345"});
@@ -197,13 +198,13 @@ async fn password_change_revokes_grants_and_other_sessions() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(send(&app, old_browser).await.status, 401);
-    assert!(state.auth.list_grants(None).unwrap().is_empty());
+    assert!(state.auth.list_grants(None).await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn wrong_current_password_is_rate_limited() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let attempt = |current: &str| {
         let body = json!({"current_password": current, "new_password": "new-pw-12345"});
@@ -222,9 +223,9 @@ async fn wrong_current_password_is_rate_limited() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_wrong_current_passwords_are_limited_to_five_evaluations() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
-    let token = token_for(&state, "kerry", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
+    let token = token_for(&state, "kerry", Role::Operator).await;
     let mut tasks = Vec::new();
     for _ in 0..50 {
         let app = app.clone();
@@ -254,8 +255,8 @@ async fn concurrent_wrong_current_passwords_are_limited_to_five_evaluations() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn user_creation_and_password_change_wait_for_an_argon2_permit() {
-    let (app, state) = test_app();
-    let admin = token_for(&state, "boss", Role::Admin);
+    let (app, state) = test_app().await;
+    let admin = token_for(&state, "boss", Role::Admin).await;
     let sem = state.auth.argon_semaphore();
     let n = sem.available_permits() as u32;
     let held = sem.acquire_many_owned(n).await.unwrap();
@@ -281,16 +282,16 @@ async fn user_creation_and_password_change_wait_for_an_argon2_permit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_last_admin_deletes_leave_one_enabled_admin() {
-    let (_app, state) = test_app();
-    create_user(&state, "a1", "pw-a1-12345", Role::Admin);
-    create_user(&state, "a2", "pw-a2-12345", Role::Admin);
+    let (_app, state) = test_app().await;
+    create_user(&state, "a1", "pw-a1-12345", Role::Admin).await;
+    create_user(&state, "a2", "pw-a2-12345", Role::Admin).await;
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
 
     let remove = |target: &'static str, barrier: std::sync::Arc<tokio::sync::Barrier>| {
         let state = state.clone();
         tokio::spawn(async move {
             barrier.wait().await;
-            state.auth.remove_user(target)
+            state.auth.remove_user(target).await
         })
     };
 
@@ -310,6 +311,7 @@ async fn concurrent_last_admin_deletes_leave_one_enabled_admin() {
     let admins: Vec<_> = state
         .auth
         .list_users()
+        .await
         .unwrap()
         .into_iter()
         .filter(|u| u.role == Role::Admin && !u.disabled)
@@ -319,9 +321,9 @@ async fn concurrent_last_admin_deletes_leave_one_enabled_admin() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_last_admin_disables_and_demotions_leave_one_enabled_admin() {
-    let (app, state) = test_app();
-    let t1 = token_for(&state, "a1", Role::Admin);
-    let t2 = token_for(&state, "a2", Role::Admin);
+    let (app, state) = test_app().await;
+    let t1 = token_for(&state, "a1", Role::Admin).await;
+    let t2 = token_for(&state, "a2", Role::Admin).await;
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
 
     let patch = |token: String,
@@ -355,6 +357,7 @@ async fn concurrent_last_admin_disables_and_demotions_leave_one_enabled_admin() 
     let admins: Vec<_> = state
         .auth
         .list_users()
+        .await
         .unwrap()
         .into_iter()
         .filter(|u| u.role == Role::Admin && !u.disabled)
@@ -364,11 +367,11 @@ async fn concurrent_last_admin_disables_and_demotions_leave_one_enabled_admin() 
 
 #[tokio::test]
 async fn password_change_via_bearer_deletes_all_browser_sessions() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let b1 = login(&app, "kerry", "pw-kerry-123").await;
     let b2 = login(&app, "kerry", "pw-kerry-123").await;
-    let bearer = token_for(&state, "kerry", Role::Viewer);
+    let bearer = token_for(&state, "kerry", Role::Viewer).await;
 
     let req = Request::put("/api/me/password")
         .header("authorization", format!("Bearer {bearer}"))

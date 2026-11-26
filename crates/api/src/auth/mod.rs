@@ -79,9 +79,13 @@ pub async fn authenticate(parts: &mut Parts, state: &AppState) -> Result<Caller,
             .map(|(_, token)| token.trim());
         let invalid = || ApiError::Unauthorized("invalid or expired access token".to_owned());
         let token = token.filter(|t| !t.is_empty()).ok_or_else(invalid)?;
-        return state.auth.access_token_caller(token)?.ok_or_else(invalid);
+        return state
+            .auth
+            .access_token_caller(token)
+            .await?
+            .ok_or_else(invalid);
     }
-    let session = session_from_parts(parts, state)?;
+    let session = session_from_parts(parts, state).await?;
     if !matches!(parts.method, Method::GET | Method::HEAD | Method::OPTIONS) {
         let supplied = parts
             .headers
@@ -101,15 +105,15 @@ pub async fn authenticate(parts: &mut Parts, state: &AppState) -> Result<Caller,
 
 /// The browser session from the cookie alone, with no CSRF check. For
 /// handlers that do their own CSRF check or only read.
-pub(crate) fn session_from_parts(
+pub(crate) async fn session_from_parts(
     parts: &Parts,
     state: &AppState,
 ) -> Result<SessionCaller, ApiError> {
-    cookies::get_cookie(&parts.headers, SESSION_COOKIE)
-        .map(|token| state.auth.session_caller(&token))
-        .transpose()?
-        .flatten()
-        .ok_or_else(|| ApiError::Unauthorized("sign in required".to_owned()))
+    match cookies::get_cookie(&parts.headers, SESSION_COOKIE) {
+        Some(token) => state.auth.session_caller(&token).await?,
+        None => None,
+    }
+    .ok_or_else(|| ApiError::Unauthorized("sign in required".to_owned()))
 }
 
 macro_rules! role_extractor {

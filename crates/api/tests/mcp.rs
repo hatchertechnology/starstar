@@ -26,7 +26,7 @@ async fn unauthenticated_mcp_gets_401_with_mcp_resource_metadata() {
 #[tokio::test]
 async fn initialize_reports_starstar_with_tools() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let r = post_mcp(
         &api,
         Some(&t),
@@ -52,7 +52,7 @@ async fn initialize_reports_starstar_with_tools() {
 #[tokio::test]
 async fn tools_list_works_without_a_session() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
     assert_eq!(r.status, 200);
     assert!(r.headers.get("mcp-session-id").is_none());
@@ -64,7 +64,7 @@ async fn tools_list_works_without_a_session() {
 #[tokio::test]
 async fn printer_status_tool_returns_structured_status() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let res = call_tool(&api, &t, "printer_status", json!({"printer": "mk4"})).await;
     assert_eq!(res["isError"], false);
     assert_eq!(res["structuredContent"]["status"]["name"], "mk4");
@@ -79,7 +79,7 @@ async fn printer_status_tool_returns_structured_status() {
 #[tokio::test]
 async fn list_printers_tool_lists_registered_printers() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let res = call_tool(&api, &t, "list_printers", json!({})).await;
     assert_eq!(res["structuredContent"]["printers"][0]["name"], "mk4");
     assert!(!res.to_string().contains(fake_prusalink::PASSWORD));
@@ -88,7 +88,7 @@ async fn list_printers_tool_lists_registered_printers() {
 #[tokio::test]
 async fn unknown_printer_is_a_404_tool_error() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let res = call_tool(&api, &t, "printer_status", json!({"printer": "nope"})).await;
     assert_eq!(res["isError"], true);
     assert_eq!(res["structuredContent"]["status"], 404);
@@ -103,7 +103,7 @@ async fn unknown_printer_is_a_404_tool_error() {
 #[tokio::test]
 async fn unknown_tool_is_a_protocol_error() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let msg = call_tool_raw(&api, &t, "no_such_tool", json!({})).await;
     assert_eq!(msg["error"]["code"], -32602, "{msg}");
     assert!(msg.get("result").is_none());
@@ -112,7 +112,7 @@ async fn unknown_tool_is_a_protocol_error() {
 #[tokio::test]
 async fn host_header_must_match_public_url_or_loopback() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let body = || rpc_body("tools/list", json!({}));
     assert_eq!(
         post_mcp(&api, Some(&t), "evil.example", body())
@@ -132,7 +132,7 @@ async fn host_header_must_match_public_url_or_loopback() {
         ..Default::default()
     })
     .await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     assert_eq!(
         post_mcp(&api, Some(&t), "print.example.com", body())
             .await
@@ -150,7 +150,7 @@ async fn host_header_must_match_public_url_or_loopback() {
 #[tokio::test]
 async fn get_and_delete_are_not_allowed_in_stateless_mode() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let auth = format!("Bearer {t}");
     for method in [Method::GET, Method::DELETE] {
         let r = api
@@ -172,7 +172,7 @@ async fn get_and_delete_are_not_allowed_in_stateless_mode() {
 #[tokio::test]
 async fn missing_host_is_400() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let auth = format!("Bearer {t}");
     let r = api
         .call_anonymous(
@@ -192,7 +192,7 @@ async fn missing_host_is_400() {
 #[tokio::test]
 async fn head_and_options_are_405() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let auth = format!("Bearer {t}");
     for method in [Method::HEAD, Method::OPTIONS] {
         let r = api
@@ -214,7 +214,7 @@ async fn origin_must_match_public_url_or_loopback() {
         ..Default::default()
     })
     .await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let auth = format!("Bearer {t}");
     let send = |origin: Option<&'static str>| {
         let api = &api;
@@ -294,7 +294,7 @@ async fn tools_list_per_role() {
     let listed = |role| {
         let api = &api;
         async move {
-            let t = token(api, role);
+            let t = token(api, role).await;
             list_tools(api, &t)
                 .await
                 .into_iter()
@@ -310,7 +310,7 @@ async fn tools_list_per_role() {
     assert_eq!(all, names(&admin));
     assert_eq!(all.len(), 32);
 
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
     let msg = rpc_result(&r);
     let stop = msg["result"]["tools"]
@@ -370,7 +370,7 @@ async fn every_tool_rejects_the_role_below_it() {
     };
     assert_eq!(cases.len(), OPERATOR_TOOLS.len() + ADMIN_TOOLS.len());
     for (tool, args, lower) in cases {
-        let t = token(&api, lower);
+        let t = token(&api, lower).await;
         let res = call_tool(&api, &t, tool, args).await;
         assert_eq!(res["isError"], true, "{tool}: {res}");
         assert_eq!(res["structuredContent"]["status"], 403, "{tool}: {res}");
@@ -381,7 +381,7 @@ async fn every_tool_rejects_the_role_below_it() {
 #[tokio::test]
 async fn hidden_tool_called_by_name_is_forbidden_not_unknown() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let msg = call_tool_raw(&api, &t, "apply_update", json!({"printer": "mk4"})).await;
     assert!(msg.get("error").is_none(), "{msg}");
     assert_eq!(msg["result"]["isError"], true);
@@ -391,7 +391,7 @@ async fn hidden_tool_called_by_name_is_forbidden_not_unknown() {
 #[tokio::test]
 async fn demoted_caller_loses_tools_on_next_request() {
     let api = TestApi::start().await;
-    let t = common::token_for(&api.state, "op", Role::Operator);
+    let t = common::token_for(&api.state, "op", Role::Operator).await;
     assert!(list_tools(&api, &t).await.contains(&"pause_job".to_owned()));
     let res = call_tool(&api, &t, "pause_job", json!({"printer": "mk4", "id": 42})).await;
     assert_eq!(res["isError"], false, "{res}");
@@ -399,6 +399,7 @@ async fn demoted_caller_loses_tools_on_next_request() {
     api.state
         .auth
         .update_user("op", Some(Role::Viewer), None)
+        .await
         .unwrap();
     assert!(!list_tools(&api, &t).await.contains(&"pause_job".to_owned()));
     let res = call_tool(&api, &t, "pause_job", json!({"printer": "mk4", "id": 42})).await;
@@ -408,11 +409,15 @@ async fn demoted_caller_loses_tools_on_next_request() {
 #[tokio::test]
 async fn disabled_user_gets_401_on_next_mcp_request() {
     let api = TestApi::start().await;
-    common::create_user(&api.state, "boss", "pw", Role::Admin);
-    let t = common::token_for(&api.state, "v", Role::Viewer);
+    common::create_user(&api.state, "boss", "pw", Role::Admin).await;
+    let t = common::token_for(&api.state, "v", Role::Viewer).await;
     let res = call_tool(&api, &t, "printer_status", json!({"printer": "mk4"})).await;
     assert_eq!(res["isError"], false);
-    api.state.auth.update_user("v", None, Some(true)).unwrap();
+    api.state
+        .auth
+        .update_user("v", None, Some(true))
+        .await
+        .unwrap();
     let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
     assert_eq!(r.status, 401);
     assert_eq!(
@@ -455,7 +460,7 @@ async fn end_to_end_initialize_and_tools_call_over_tcp() {
     assert_eq!(doc["resource"], "http://127.0.0.1:8080/mcp");
 
     // 2-7. A signed-in operator talks MCP.
-    let token = common::token_for(&api.state, "agent", Role::Operator);
+    let token = common::token_for(&api.state, "agent", Role::Operator).await;
     let send = |body: serde_json::Value, version: bool| {
         let mut req = http
             .post(format!("{base}/mcp"))
@@ -538,7 +543,7 @@ async fn body_over_the_limit_is_413() {
         ..Config::default()
     })
     .await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let padded = |len: usize| {
         let base = rpc_body("tools/list", json!({"pad": ""})).to_string().len();
         rpc_body("tools/list", json!({"pad": "a".repeat(len - base)}))

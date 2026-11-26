@@ -24,7 +24,7 @@ fn fake_saw(api: &TestApi, method: Method, uri: &str) -> bool {
 #[tokio::test]
 async fn get_job_returns_current_job_or_null() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let res = call_tool(&api, &t, "get_job", json!({"printer": "mk4"})).await;
     assert_eq!(res["structuredContent"]["job"]["id"], 42);
     api.fake.set(Method::GET, "/api/v1/job", Canned::empty(204));
@@ -36,7 +36,7 @@ async fn get_job_returns_current_job_or_null() {
 #[tokio::test]
 async fn job_controls_use_given_or_current_id() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let res = call_tool(&api, &t, "pause_job", json!({"printer": "mk4", "id": 42})).await;
     assert_eq!(res["isError"], false);
     assert_eq!(text(&res), "Paused job 42 on mk4.");
@@ -57,7 +57,7 @@ async fn job_controls_use_given_or_current_id() {
 #[tokio::test]
 async fn job_control_without_running_job_is_409() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     api.fake.set(Method::GET, "/api/v1/job", Canned::empty(204));
     let res = call_tool(&api, &t, "pause_job", json!({"printer": "mk4"})).await;
     assert_eq!(res["isError"], true);
@@ -71,7 +71,7 @@ async fn job_control_without_running_job_is_409() {
 #[tokio::test]
 async fn id_less_controls_check_the_role_before_any_lookup() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     for tool in [
         "pause_job",
         "resume_job",
@@ -89,7 +89,7 @@ async fn id_less_controls_check_the_role_before_any_lookup() {
 #[tokio::test]
 async fn transfer_tools() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let res = call_tool(&api, &t, "get_transfer", json!({"printer": "mk4"})).await;
     assert_eq!(res["structuredContent"]["transfer"]["id"], 7);
     let res = call_tool(&api, &t, "cancel_transfer", json!({"printer": "mk4"})).await;
@@ -100,7 +100,7 @@ async fn transfer_tools() {
 #[tokio::test]
 async fn transfer_control_without_transfer_is_409() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     api.fake
         .set(Method::GET, "/api/v1/transfer", Canned::empty(204));
     let res = call_tool(&api, &t, "cancel_transfer", json!({"printer": "mk4"})).await;
@@ -114,7 +114,7 @@ async fn transfer_control_without_transfer_is_409() {
 #[tokio::test]
 async fn printer_info_storage_and_get_printer() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let res = call_tool(&api, &t, "printer_info", json!({"printer": "mk4"})).await;
     assert_eq!(res["structuredContent"]["info"]["name"], "mk4");
     let res = call_tool(&api, &t, "list_storage", json!({"printer": "mk4"})).await;
@@ -127,7 +127,7 @@ async fn printer_info_storage_and_get_printer() {
 #[tokio::test]
 async fn printer_errors_become_tool_errors() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     api.fake
         .set(Method::PUT, "/api/v1/job/42/pause", Canned::empty(409));
     let res = call_tool(&api, &t, "pause_job", json!({"printer": "mk4", "id": 42})).await;
@@ -135,7 +135,7 @@ async fn printer_errors_become_tool_errors() {
     assert_eq!(res["structuredContent"]["status"], 409);
     assert!(text(&res).contains("printer is busy"), "{}", text(&res));
 
-    api.add_printer("gone", "127.0.0.1:1", PASSWORD);
+    api.add_printer("gone", "127.0.0.1:1", PASSWORD).await;
     let res = call_tool(&api, &t, "printer_status", json!({"printer": "gone"})).await;
     assert_eq!(res["isError"], true);
     assert_eq!(res["structuredContent"]["status"], 502);
@@ -145,7 +145,7 @@ async fn printer_errors_become_tool_errors() {
         ..Default::default()
     })
     .await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     api.fake.set_delay(Duration::from_secs(2));
     let res = call_tool(&api, &t, "printer_status", json!({"printer": "mk4"})).await;
     assert_eq!(res["structuredContent"]["status"], 504);
@@ -171,7 +171,7 @@ fn puts(api: &TestApi) -> Vec<fake_prusalink::Recorded> {
 #[tokio::test]
 async fn list_files_and_file_state() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let res = call_tool(
         &api,
         &t,
@@ -216,7 +216,7 @@ async fn list_files_and_file_state() {
 #[tokio::test]
 async fn upload_file_sends_decoded_bytes_with_options() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let res = call_tool(
         &api,
         &t,
@@ -246,7 +246,7 @@ async fn upload_cap_boundary() {
         ..Default::default()
     })
     .await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let args = |n: usize| json!({"printer": "mk4", "storage": "usb", "path": "a.gcode", "content_base64": b64(&vec![b'x'; n])});
     let res = call_tool(&api, &t, "upload_file", args(16)).await;
     assert_eq!(res["isError"], false, "{res}");
@@ -267,7 +267,7 @@ async fn upload_cap_boundary_at_one_mib_with_wrapped_base64() {
         ..Default::default()
     })
     .await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let args = |n: usize| {
         json!({"printer": "mk4", "storage": "usb", "path": "a.gcode",
                "content_base64": wrap(&b64(&vec![b'x'; n]), 76)})
@@ -283,7 +283,7 @@ async fn upload_cap_boundary_at_one_mib_with_wrapped_base64() {
 #[tokio::test]
 async fn upload_accepts_wrapped_base64() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let content = b"G28\nG1 X10 Y10 F3000\nM104 S0\n";
     let spaced: String = b64(content)
         .as_bytes()
@@ -306,7 +306,7 @@ async fn upload_accepts_wrapped_base64() {
 #[tokio::test]
 async fn upload_rejects_invalid_base64() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let res = call_tool(
         &api,
         &t,
@@ -325,7 +325,7 @@ async fn upload_checks_the_role_before_decoding() {
         ..Default::default()
     })
     .await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let res = call_tool(
         &api,
         &t,
@@ -340,7 +340,7 @@ async fn upload_checks_the_role_before_decoding() {
 #[tokio::test]
 async fn upload_description_names_the_configured_limit() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
     let msg = rpc_result(&r);
     let upload = msg["result"]["tools"]
@@ -358,7 +358,7 @@ async fn upload_description_names_the_configured_limit() {
 #[tokio::test]
 async fn start_print_and_delete_file() {
     let api = TestApi::start().await;
-    let op = token(&api, Role::Operator);
+    let op = token(&api, Role::Operator).await;
     let res = call_tool(
         &api,
         &op,
@@ -373,7 +373,7 @@ async fn start_print_and_delete_file() {
         "/api/v1/files/usb/cube-12mm.bgcode"
     ));
 
-    let admin = token(&api, Role::Admin);
+    let admin = token(&api, Role::Admin).await;
     let res = call_tool(
         &api,
         &admin,
@@ -389,7 +389,7 @@ async fn start_print_and_delete_file() {
 #[tokio::test]
 async fn camera_snapshot_returns_image_content() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Viewer);
+    let t = token(&api, Role::Viewer).await;
     let res = call_tool(&api, &t, "camera_snapshot", json!({"printer": "mk4"})).await;
     assert_eq!(res["isError"], false, "{res}");
     assert_eq!(res["content"][0]["type"], "image");
@@ -419,7 +419,7 @@ async fn camera_snapshot_returns_image_content() {
 #[tokio::test]
 async fn take_snapshot_posts_and_returns_image() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Operator);
+    let t = token(&api, Role::Operator).await;
     let res = call_tool(
         &api,
         &t,
@@ -434,7 +434,7 @@ async fn take_snapshot_posts_and_returns_image() {
 #[tokio::test]
 async fn camera_admin_tools_forward() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Admin);
+    let t = token(&api, Role::Admin).await;
     let p = |extra: serde_json::Value| {
         let mut v = json!({"printer": "mk4"});
         v.as_object_mut()
@@ -506,7 +506,7 @@ async fn camera_admin_tools_forward() {
 #[tokio::test]
 async fn update_tools() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Admin);
+    let t = token(&api, Role::Admin).await;
     let res = call_tool(&api, &t, "check_update", json!({"printer": "mk4"})).await;
     assert_eq!(res["structuredContent"]["update"]["env"], "prusalink");
     assert_eq!(res["structuredContent"]["update"]["available"], true);
@@ -526,7 +526,7 @@ async fn update_tools() {
 #[tokio::test]
 async fn register_printer_never_echoes_password() {
     let api = TestApi::start().await;
-    let t = token(&api, Role::Admin);
+    let t = token(&api, Role::Admin).await;
     let host = api.fake.addr.to_string();
     let res = call_tool(
         &api,

@@ -13,7 +13,7 @@ async fn get(app: &axum::Router, path: &str) -> TestResponse {
 
 #[tokio::test]
 async fn authorization_server_metadata() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     let r = get(&app, "/.well-known/oauth-authorization-server").await;
     assert_eq!(r.status, 200);
     let j = r.json();
@@ -30,7 +30,7 @@ async fn authorization_server_metadata() {
 
 #[tokio::test]
 async fn protected_resource_metadata_root_and_mcp() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     let r = get(&app, "/.well-known/oauth-protected-resource").await;
     assert_eq!(r.status, 200);
     assert_eq!(r.json()["resource"], "http://127.0.0.1:8080");
@@ -53,7 +53,7 @@ async fn protected_resource_metadata_root_and_mcp() {
 
 #[tokio::test]
 async fn registers_public_client() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let r = post_json(
         &app,
         "/oauth/register",
@@ -64,12 +64,15 @@ async fn registers_public_client() {
     let id = r.json()["client_id"].as_str().unwrap().to_owned();
     assert!(id.starts_with("ss_cl_"));
     assert_eq!(r.json()["token_endpoint_auth_method"], "none");
-    assert_eq!(state.auth.client(&id).unwrap().unwrap().name, "Claude Code");
+    assert_eq!(
+        state.auth.client(&id).await.unwrap().unwrap().name,
+        "Claude Code"
+    );
 }
 
 #[tokio::test]
 async fn registration_rejections() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     let reg = |v: serde_json::Value| post_json(&app, "/oauth/register", v);
     let cases = [
         (json!({"redirect_uris": []}), "invalid_redirect_uri"),
@@ -103,7 +106,7 @@ async fn registration_rejections() {
 
 #[tokio::test]
 async fn client_name_is_sanitized() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let name = |n: Option<String>| {
         let mut body = json!({"redirect_uris":["https://a.example/cb"]});
         if let Some(n) = n {
@@ -116,6 +119,7 @@ async fn client_name_is_sanitized() {
             state
                 .auth
                 .client(r.json()["client_id"].as_str().unwrap())
+                .await
                 .unwrap()
                 .unwrap()
                 .name
@@ -128,7 +132,7 @@ async fn client_name_is_sanitized() {
 
 #[tokio::test]
 async fn registration_is_rate_limited_per_ip() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let body = json!({"redirect_uris":["https://a.example/cb"]});
     for _ in 0..20 {
         assert_eq!(

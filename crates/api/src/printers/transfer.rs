@@ -18,7 +18,7 @@ pub async fn current_transfer(
     printer: &str,
 ) -> Result<Option<Transfer>, ApiError> {
     caller.require(CURRENT_TRANSFER_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let client = client(state, &printer);
     let Some(wire) = client.transfer().await? else {
         return Ok(None);
@@ -37,6 +37,6 @@ pub async fn cancel_transfer(
     id: u64,
 ) -> Result<(), ApiError> {
     caller.require(CANCEL_TRANSFER_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     Ok(client(state, &printer).cancel_transfer(id).await?)
 }

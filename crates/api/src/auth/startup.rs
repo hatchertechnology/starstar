@@ -1,13 +1,22 @@
 //! Startup checks on the configuration.
 
 use std::net::SocketAddr;
+use std::str::FromStr;
 
+use sqlx::postgres::PgConnectOptions;
 use url::Url;
 
 use crate::config::Config;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
+    #[error(
+        "STARSTAR_DATABASE_URL is required (set a postgres:// or postgresql:// connection URL)"
+    )]
+    MissingDatabaseUrl,
+    /// Deliberately carries no URL text: it may contain credentials.
+    #[error("{0}")]
+    InvalidDatabaseUrl(String),
     #[error("STARSTAR_BIND `{0}` is not a socket address like 127.0.0.1:8080")]
     InvalidBind(String),
     /// Deliberately carries no URL text: it may contain credentials.
@@ -23,6 +32,10 @@ pub enum StartupError {
     InvalidTrustedProxy(String),
     #[error("STARSTAR_SETUP_TOKEN must be at least 16 characters")]
     WeakSetupToken,
+}
+
+fn bad_db_url(why: &str) -> StartupError {
+    StartupError::InvalidDatabaseUrl(format!("STARSTAR_DATABASE_URL is invalid: {why}"))
 }
 
 fn bad_url(why: &str) -> StartupError {
@@ -46,6 +59,24 @@ pub fn trusted_proxies_line(config: &Config) -> String {
 /// caller prints to stderr. Only the first applicable warning is returned
 /// (plain HTTP, then the proxy list); callers that add more must return a list.
 pub fn check_config(config: &Config) -> Result<Option<String>, StartupError> {
+    let raw_db = config
+        .database_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(StartupError::MissingDatabaseUrl)?;
+    let db_url =
+        Url::parse(raw_db).map_err(|_| bad_db_url("must be a postgres:// or postgresql:// URL"))?;
+    if !matches!(db_url.scheme(), "postgres" | "postgresql") {
+        return Err(bad_db_url("the scheme must be postgres or postgresql"));
+    }
+    if db_url.host_str().is_none() {
+        return Err(bad_db_url("it needs a host"));
+    }
+    if PgConnectOptions::from_str(raw_db).is_err() {
+        return Err(bad_db_url("could not parse PostgreSQL connection options"));
+    }
+
     let bind: SocketAddr = config
         .bind
         .parse()
@@ -98,8 +129,18 @@ pub fn check_config(config: &Config) -> Result<Option<String>, StartupError> {
 mod tests {
     use super::*;
 
+    const TEST_DB_URL: &str = "postgres://starstar:dev@127.0.0.1:54329/starstar";
+
+    fn valid_config() -> Config {
+        Config {
+            database_url: Some(TEST_DB_URL.into()),
+            ..Config::default()
+        }
+    }
+
     fn cfg(bind: &str, url: &str, insecure: bool) -> Config {
         Config {
+            database_url: Some(TEST_DB_URL.into()),
             bind: bind.into(),
             public_url: url.into(),
             allow_insecure_http: insecure,
@@ -109,7 +150,31 @@ mod tests {
 
     #[test]
     fn defaults_pass_without_warning() {
-        assert!(check_config(&Config::default()).unwrap().is_none());
+        assert!(check_config(&valid_config()).unwrap().is_none());
+    }
+
+    #[test]
+    fn requires_valid_postgres_database_url_without_leaking_credentials() {
+        assert!(matches!(
+            check_config(&Config::default()),
+            Err(StartupError::MissingDatabaseUrl)
+        ));
+        for bad in [
+            "starstar.db",
+            "sqlite:///tmp/starstar.db",
+            "http://user:hunter2@127.0.0.1/db",
+            "postgres://user:hunter2@/nohost",
+            "postgres://user:hunter2@db:notaport/starstar",
+        ] {
+            let mut c = valid_config();
+            c.database_url = Some(bad.into());
+            let err = check_config(&c).unwrap_err();
+            assert!(
+                matches!(err, StartupError::InvalidDatabaseUrl(_)),
+                "{bad}: {err}"
+            );
+            assert!(!err.to_string().contains("hunter2"), "{err}");
+        }
     }
 
     #[test]
@@ -191,6 +256,7 @@ mod tests {
         assert!(!warning.contains("print.example.com"), "{warning}");
         // The loopback-bind defaults trust local proxies, so no warning.
         let c = Config::from_lookup(|k| match k {
+            "STARSTAR_DATABASE_URL" => Some(TEST_DB_URL.into()),
             "STARSTAR_PUBLIC_URL" => Some("https://print.example.com".into()),
             _ => None,
         });
@@ -201,7 +267,7 @@ mod tests {
     fn an_invalid_trusted_proxy_entry_fails_the_check() {
         let c = Config {
             invalid_trusted_proxies: vec!["10.0.0.0/33".into()],
-            ..Config::default()
+            ..valid_config()
         };
         let err = check_config(&c).unwrap_err();
         assert!(matches!(err, StartupError::InvalidTrustedProxy(_)));
@@ -220,7 +286,7 @@ mod tests {
     fn short_setup_token_is_refused() {
         let mut c = Config {
             setup_token: Some("short".into()),
-            ..Config::default()
+            ..valid_config()
         };
         assert!(matches!(
             check_config(&c),

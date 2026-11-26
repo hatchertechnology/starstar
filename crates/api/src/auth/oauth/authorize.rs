@@ -109,7 +109,8 @@ async fn authorize(
         .ok_or_else(|| OAuthError::invalid_request("client_id is required"))?;
     let client = state
         .auth
-        .client(client_id)?
+        .client(client_id)
+        .await?
         .ok_or_else(|| OAuthError::invalid_request("unknown client_id"))?;
     let redirect_uri = q
         .redirect_uri
@@ -173,7 +174,7 @@ async fn authorize(
         .ok_or_else(OAuthError::temporarily_unavailable)?;
 
     let consent = format!("/consent?request={id}");
-    if session_from_parts(&parts, &state).is_ok() {
+    if session_from_parts(&parts, &state).await.is_ok() {
         Ok(see_other(&consent))
     } else {
         let next: String = url::form_urlencoded::byte_serialize(consent.as_bytes()).collect();
@@ -186,12 +187,13 @@ async fn consent_request(
     parts: Parts,
     Path(id): Path<String>,
 ) -> Result<Json<ConsentRequest>, ApiError> {
-    let session = session_from_parts(&parts, &state)?;
+    let session = session_from_parts(&parts, &state).await?;
     let not_found = || ApiError::NotFound("no such authorization request".to_owned());
     let pending = state.auth.pending(&id).ok_or_else(not_found)?;
     let client = state
         .auth
-        .client(&pending.client_id)?
+        .client(&pending.client_id)
+        .await?
         .ok_or_else(not_found)?;
     let user_role = session.caller.role;
     let redirect_host = Url::parse(&pending.redirect_uri)
@@ -253,7 +255,7 @@ async fn decision(
     parts: Parts,
     Form(form): Form<Decision>,
 ) -> Result<Response, ApiError> {
-    match decide(&state, &parts, &form) {
+    match decide(&state, &parts, &form).await {
         Ok(response) => Ok(response),
         Err((error, failure)) if wants_html(&parts) => {
             let id: String =
@@ -276,8 +278,10 @@ async fn decision(
     }
 }
 
-fn decide(state: &AppState, parts: &Parts, form: &Decision) -> DecisionResult {
-    let session = session_from_parts(parts, state).map_err(|e| (e, Failure::NoSession))?;
+async fn decide(state: &AppState, parts: &Parts, form: &Decision) -> DecisionResult {
+    let session = session_from_parts(parts, state)
+        .await
+        .map_err(|e| (e, Failure::NoSession))?;
     let supplied = parts
         .headers
         .get(CSRF_HEADER)
@@ -350,6 +354,7 @@ fn decide(state: &AppState, parts: &Parts, form: &Decision) -> DecisionResult {
                     code_challenge: &pending.code_challenge,
                     resource: pending.resource.as_deref(),
                 })
+                .await
                 .map_err(|e| (ApiError::from(e), Failure::Other))?;
             redirect_with(
                 &pending.redirect_uri,
@@ -403,7 +408,7 @@ async fn copy_code(
     parts: Parts,
     Query(q): Query<CodeQuery>,
 ) -> Response {
-    let Ok(session) = session_from_parts(&parts, &state) else {
+    let Ok(session) = session_from_parts(&parts, &state).await else {
         return page(
             StatusCode::UNAUTHORIZED,
             "<!doctype html><meta charset=utf-8><title>starstar</title><p>Sign in first, then try again.</p>"
@@ -423,6 +428,7 @@ async fn copy_code(
     if !state
         .auth
         .code_shown_to(&code, session.user_id)
+        .await
         .unwrap_or(false)
     {
         return page(

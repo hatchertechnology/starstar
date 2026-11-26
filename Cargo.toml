@@ -31,7 +31,7 @@ rmcp = { version = "~3.8", default-features = false, features = ["server", "macr
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
-rusqlite = { version = "0.43", features = ["bundled"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "tls-rustls-ring-native-roots", "json"] }
 serde_json = "1"
 sha2 = "0.10"
 subtle = "2.6"

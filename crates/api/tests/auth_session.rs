@@ -30,8 +30,8 @@ fn get(b: Browser, path: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn login_sets_cookies_and_get_session_returns_user() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let r = send(
         &app,
@@ -50,8 +50,8 @@ async fn login_sets_cookies_and_get_session_returns_user() {
 
 #[tokio::test]
 async fn session_cookie_attributes() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let r = post_login(&app, "kerry", "pw-kerry-123").await;
     assert_eq!(r.status, 200);
     assert_eq!(r.headers["cache-control"], "no-store");
@@ -75,12 +75,12 @@ async fn session_cookie_attributes() {
     assert!(!csrf.contains("HttpOnly"));
 
     // https public URL: both cookies are Secure.
-    let mut state = test_state();
+    let mut state = test_state().await;
     state.config = Arc::new(Config {
         public_url: "https://print.example.com".into(),
         ..Config::default()
     });
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let app = router(state);
     let r = post_login(&app, "kerry", "pw-kerry-123").await;
     assert_eq!(r.status, 200);
@@ -91,8 +91,8 @@ async fn session_cookie_attributes() {
 
 #[tokio::test]
 async fn unsafe_cookie_requests_need_csrf() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let req = b
         .cookie_only(Request::delete("/api/session"))
@@ -125,8 +125,9 @@ async fn unsafe_cookie_requests_need_csrf() {
 
 #[tokio::test]
 async fn bearer_callers_cannot_delete_a_session() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let req = authorize(Request::delete("/api/session"), &state, Role::Viewer)
+        .await
         .body(Body::empty())
         .unwrap();
     assert_eq!(send(&app, req).await.status, 400);
@@ -134,11 +135,15 @@ async fn bearer_callers_cannot_delete_a_session() {
 
 #[tokio::test]
 async fn login_failures_are_uniform_and_rate_limited() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
-    create_user(&state, "off", "pw-off-1234", Role::Viewer);
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    state.auth.update_user("off", None, Some(true)).unwrap();
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
+    create_user(&state, "off", "pw-off-1234", Role::Viewer).await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
+    state
+        .auth
+        .update_user("off", None, Some(true))
+        .await
+        .unwrap();
     let unknown = post_login(&app, "ghost", "whatever-123").await;
     let wrong = post_login(&app, "kerry", "not-the-password").await;
     let disabled = post_login(&app, "off", "pw-off-1234").await;
@@ -161,7 +166,7 @@ async fn login_failures_are_uniform_and_rate_limited() {
 
 #[tokio::test]
 async fn login_limiter_does_not_grow_for_malformed_usernames() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     for i in 0..50 {
         let r = post_login(&app, &format!("bad name {i}"), "whatever-123").await;
         assert_eq!(r.status, 401);
@@ -169,8 +174,8 @@ async fn login_limiter_does_not_grow_for_malformed_usernames() {
     let long = "a".repeat(5000);
     assert_eq!(post_login(&app, &long, "whatever-123").await.status, 401);
     // None of those blocked a real user.
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     for _ in 0..10 {
         post_login(&app, "Not A User!", "x").await;
     }
@@ -179,18 +184,18 @@ async fn login_limiter_does_not_grow_for_malformed_usernames() {
 
 #[tokio::test]
 async fn disabled_user_session_fails_on_next_request() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    create_user(&state, "v", "pw-v-123456", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
+    create_user(&state, "v", "pw-v-123456", Role::Viewer).await;
     let b = login(&app, "v", "pw-v-123456").await;
-    state.auth.update_user("v", None, Some(true)).unwrap();
+    state.auth.update_user("v", None, Some(true)).await.unwrap();
     assert_eq!(send(&app, get(b, "/api/me")).await.status, 401);
 }
 
 #[tokio::test]
 async fn session_expires_after_seven_days() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     state.auth.clock().advance(7 * 86400 - 1);
     assert_eq!(send(&app, get(b.copy(), "/api/session")).await.status, 200);
@@ -200,8 +205,8 @@ async fn session_expires_after_seven_days() {
 
 #[tokio::test]
 async fn bearer_header_wins_over_cookie() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let req = b
         .cookie_only(Request::get("/api/me"))
@@ -213,8 +218,8 @@ async fn bearer_header_wins_over_cookie() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_bad_logins_are_limited_to_five_evaluations() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     let mut tasks = Vec::new();
     for _ in 0..50 {
         let app = app.clone();
@@ -245,8 +250,8 @@ async fn hold_all_permits(state: &starstar_api::AppState) -> tokio::sync::OwnedS
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn argon2_work_waits_for_a_global_permit() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     let held = hold_all_permits(&state).await;
     let task = {
         let app = app.clone();
@@ -261,8 +266,8 @@ async fn argon2_work_waits_for_a_global_permit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn waiting_too_long_for_a_permit_is_a_503_with_retry_after() {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        let (app, state) = test_app();
-        create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+        let (app, state) = test_app().await;
+        create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
         state
             .auth
             .set_argon_wait(std::time::Duration::from_millis(100));
@@ -287,8 +292,8 @@ async fn waiting_too_long_for_a_permit_is_a_503_with_retry_after() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn timed_out_change_password_attempts_are_refunded() {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        let (app, state) = test_app();
-        create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+        let (app, state) = test_app().await;
+        create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
         let b = login(&app, "kerry", "pw-kerry-123").await;
         state
             .auth
@@ -332,11 +337,11 @@ fn login_from(peer: &str, xff: &str, user: &str, pw: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn spoofed_forwarded_for_values_cannot_dodge_the_per_user_limit() {
-    let mut state = test_state();
+    let mut state = test_state().await;
     // The loopback-bind default: a local proxy's X-Forwarded-For is believed.
     state.config = Arc::new(Config::from_lookup(|_| None));
     let app = router(state.clone());
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     // A local hop that passes the client's X-Forwarded-For through unchanged.
     let mut last = 0;
     for i in 0..25 {
@@ -361,11 +366,11 @@ async fn spoofed_forwarded_for_values_cannot_dodge_the_per_user_limit() {
 
 #[tokio::test]
 async fn a_successful_login_refunds_the_per_user_limit() {
-    let mut state = test_state();
+    let mut state = test_state().await;
     // The loopback-bind default: a local proxy's X-Forwarded-For is believed.
     state.config = Arc::new(Config::from_lookup(|_| None));
     let app = router(state.clone());
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     for i in 0..60 {
         let xff = format!("198.51.100.{}", i + 1);
         let r = send(
@@ -379,7 +384,7 @@ async fn a_successful_login_refunds_the_per_user_limit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_users_also_wait_for_a_permit() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let held = hold_all_permits(&state).await;
     let task = {
         let app = app.clone();
@@ -393,8 +398,8 @@ async fn unknown_users_also_wait_for_a_permit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn overlong_passwords_are_refused_before_any_argon2_work() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     let _held = hold_all_permits(&state).await;
     let long = "x".repeat(257);
     let r = tokio::time::timeout(
@@ -415,8 +420,8 @@ async fn overlong_passwords_are_refused_before_any_argon2_work() {
 
 #[tokio::test]
 async fn per_ip_login_limiter_stops_username_rotation() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     for i in 0..30 {
         let r = post_login(&app, &format!("ghost{i}"), "whatever-pw").await;
         assert_eq!(r.status, 401, "attempt {i}");
@@ -429,8 +434,8 @@ async fn per_ip_login_limiter_stops_username_rotation() {
 
 #[tokio::test]
 async fn successful_logins_do_not_use_up_the_per_ip_budget() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator).await;
     for _ in 0..40 {
         assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
     }
@@ -438,9 +443,9 @@ async fn successful_logins_do_not_use_up_the_per_ip_budget() {
 
 #[tokio::test]
 async fn logout_only_deletes_current_session_and_user_delete_cascades_sessions() {
-    let (app, state) = test_app();
-    let admin = token_for(&state, "boss", Role::Admin);
-    create_user(&state, "v", "pw-v-123456", Role::Viewer);
+    let (app, state) = test_app().await;
+    let admin = token_for(&state, "boss", Role::Admin).await;
+    create_user(&state, "v", "pw-v-123456", Role::Viewer).await;
     let b1 = login(&app, "v", "pw-v-123456").await;
     let b2 = login(&app, "v", "pw-v-123456").await;
 

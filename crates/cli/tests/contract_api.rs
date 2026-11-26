@@ -46,20 +46,31 @@ impl RealApi {
         let url = format!("http://127.0.0.1:{port}");
         // Built like `crates/api/tests/common::test_state()`, but with the
         // real clock, because tokens must expire in real time here.
-        let db = Db::open_in_memory().unwrap();
-        let state = AppState {
-            store: Arc::new(PrinterStore::from_db(db.clone())),
-            auth: Arc::new(AuthStore::new(db, Clock::system(), Hasher::fast_for_tests()).unwrap()),
-            http: http_client().unwrap(),
-            config: Arc::new(Config {
-                public_url: url.clone(),
-                ..Config::default()
-            }),
-        };
-        if with_admin {
-            let hash = state.auth.hasher().hash(ADMIN_PASSWORD);
-            state.auth.create_user(ADMIN, &hash, Role::Admin).unwrap();
-        }
+        let state = rt.block_on(async {
+            let db = Db::connect_test().await;
+            let state = AppState {
+                store: Arc::new(PrinterStore::from_db(db.clone())),
+                auth: Arc::new(
+                    AuthStore::new(db, Clock::system(), Hasher::fast_for_tests())
+                        .await
+                        .unwrap(),
+                ),
+                http: http_client().unwrap(),
+                config: Arc::new(Config {
+                    public_url: url.clone(),
+                    ..Config::default()
+                }),
+            };
+            if with_admin {
+                let hash = state.auth.hasher().hash(ADMIN_PASSWORD);
+                state
+                    .auth
+                    .create_user(ADMIN, &hash, Role::Admin)
+                    .await
+                    .unwrap();
+            }
+            state
+        });
         let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
         rt.spawn(async move {
             let l = tokio::net::TcpListener::from_std(listener).unwrap();
@@ -321,9 +332,11 @@ fn real_setup_then_login() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(api.state.auth.user_by_name("boss").unwrap().is_some());
-    // Setup is closed now.
-    assert_eq!(api.state.auth.user_count().unwrap(), 1);
+    api._rt.block_on(async {
+        assert!(api.state.auth.user_by_name("boss").await.unwrap().is_some());
+        // Setup is closed now.
+        assert_eq!(api.state.auth.user_count().await.unwrap(), 1);
+    });
 }
 
 #[test]

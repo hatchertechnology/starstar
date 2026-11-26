@@ -367,7 +367,7 @@ impl TestApi {
     pub async fn start_with(config: Config) -> Self {
         let state = AppState {
             config: Arc::new(config),
-            ..common::test_state()
+            ..common::test_state().await
         };
         let fake = FakePrinter::start().await;
         let api = Self {
@@ -375,12 +375,13 @@ impl TestApi {
             state,
             fake,
         };
-        api.add_printer("mk4", &api.fake.addr.to_string(), PASSWORD);
+        api.add_printer("mk4", &api.fake.addr.to_string(), PASSWORD)
+            .await;
         api
     }
 
     /// Registers a printer directly in the store, skipping the reachability check.
-    pub fn add_printer(&self, name: &str, host: &str, password: &str) {
+    pub async fn add_printer(&self, name: &str, host: &str, password: &str) {
         self.state
             .store
             .insert(StoredPrinter {
@@ -390,6 +391,7 @@ impl TestApi {
                 username: USERNAME.to_owned(),
                 password: password.to_owned(),
             })
+            .await
             .unwrap();
     }
 
@@ -405,7 +407,7 @@ impl TestApi {
         for (k, v) in headers {
             builder = builder.header(*k, *v);
         }
-        let builder = common::authorize(builder, &self.state, role);
+        let builder = common::authorize(builder, &self.state, role).await;
         self.dispatch(builder.body(body).unwrap()).await
     }
 

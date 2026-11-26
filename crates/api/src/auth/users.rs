@@ -41,7 +41,7 @@ async fn list_users(
     State(state): State<AppState>,
     _admin: Admin,
 ) -> Result<Json<Vec<UserSummary>>, ApiError> {
-    let users = state.auth.list_users()?;
+    let users = state.auth.list_users().await?;
     Ok(Json(users.iter().map(|u| u.summary()).collect()))
 }
 
@@ -55,7 +55,10 @@ async fn create_user(
     }
     validate_password(&req.password)?;
     let hash = state.auth.hash_password(req.password).await?;
-    let user = state.auth.create_user(&req.username, &hash, req.role)?;
+    let user = state
+        .auth
+        .create_user(&req.username, &hash, req.role)
+        .await?;
     Ok((StatusCode::CREATED, Json(user.summary())))
 }
 
@@ -68,7 +71,10 @@ async fn update_user(
     if req.role.is_none() && req.disabled.is_none() {
         return Err(ApiError::BadRequest("nothing to change".to_owned()));
     }
-    let user = state.auth.update_user(&username, req.role, req.disabled)?;
+    let user = state
+        .auth
+        .update_user(&username, req.role, req.disabled)
+        .await?;
     Ok(Json(user.summary()))
 }
 
@@ -77,7 +83,7 @@ async fn remove_user(
     _admin: Admin,
     Path(username): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.auth.remove_user(&username)?;
+    state.auth.remove_user(&username).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -89,7 +95,8 @@ async fn change_password(
 ) -> Result<StatusCode, ApiError> {
     let auth = &state.auth;
     let user = auth
-        .user_by_name(&caller.username)?
+        .user_by_name(&caller.username)
+        .await?
         .ok_or_else(|| ApiError::Unauthorized("sign in required".to_owned()))?;
 
     // Guessing the current password goes through the sign-in limiter.
@@ -136,11 +143,11 @@ async fn change_password(
 
     validate_password(&req.new_password)?;
     let new_hash = auth.hash_password(req.new_password).await?;
-    auth.set_password(user.id, &new_hash)?;
+    auth.set_password(user.id, &new_hash).await?;
     // Everything else signed in as this user must sign in again, and every
     // connected app is revoked.
     let keep = get_cookie(&parts.headers, SESSION_COOKIE);
-    auth.delete_other_sessions(user.id, keep.as_deref())?;
-    auth.revoke_user_grants(user.id)?;
+    auth.delete_other_sessions(user.id, keep.as_deref()).await?;
+    auth.revoke_user_grants(user.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

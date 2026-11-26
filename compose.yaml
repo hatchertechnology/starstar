@@ -1,5 +1,5 @@
-# Local development database. The API container will be added when PostgreSQL
-# support is implemented; credentials here are for local development only.
+# Local development stack (PostgreSQL + API/UI).
+# Credentials and plain HTTP here are for local development only; do not use in production.
 services:
   db:
     image: docker.io/library/postgres:17-bookworm
@@ -16,6 +16,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      STARSTAR_DATABASE_URL: postgres://starstar:starstar-dev@db:5432/starstar
+      STARSTAR_BIND: 0.0.0.0:8080
+      STARSTAR_PUBLIC_URL: http://127.0.0.1:8080
+      STARSTAR_ALLOW_INSECURE_HTTP: "1"
+      STARSTAR_SETUP_TOKEN: ${STARSTAR_SETUP_TOKEN:-}
 
 volumes:
   postgres-data:

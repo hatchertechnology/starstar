@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 const MARKER: &str = "SPA-MARKER";
 
-fn web_app() -> (Router, AppState, TempDir) {
+async fn web_app() -> (Router, AppState, TempDir) {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("public");
     std::fs::create_dir_all(dir.join("_nuxt/builds/meta")).unwrap();
@@ -28,12 +28,12 @@ fn web_app() -> (Router, AppState, TempDir) {
     std::fs::write(dir.join("_nuxt/builds/latest.json"), "{}").unwrap();
     std::fs::write(dir.join("favicon.ico"), "ico").unwrap();
     std::fs::write(tmp.path().join("secret.txt"), "TOP-SECRET").unwrap();
-    let state = state_with(dir.to_str().unwrap());
+    let state = state_with(dir.to_str().unwrap()).await;
     (starstar_api::router(state.clone()), state, tmp)
 }
 
-fn state_with(web_dir: &str) -> AppState {
-    let base = test_state();
+async fn state_with(web_dir: &str) -> AppState {
+    let base = test_state().await;
     AppState {
         config: Arc::new(Config {
             web_dir: web_dir.to_owned(),
@@ -56,7 +56,7 @@ fn header<'a>(r: &'a TestResponse, name: &str) -> &'a str {
 
 #[tokio::test]
 async fn serves_index_at_root() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     let r = get(&app, "/").await;
     assert_eq!(r.status, 200);
     assert!(header(&r, "content-type").starts_with("text/html"));
@@ -66,7 +66,7 @@ async fn serves_index_at_root() {
 
 #[tokio::test]
 async fn serves_hashed_asset_with_long_cache() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     let r = get(&app, "/_nuxt/app.abc123.js").await;
     assert_eq!(r.status, 200);
     assert!(header(&r, "content-type").contains("javascript"));
@@ -75,7 +75,7 @@ async fn serves_hashed_asset_with_long_cache() {
 
 #[tokio::test]
 async fn not_modified_hashed_asset_stays_immutable() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     let first = get(&app, "/_nuxt/app.abc123.js").await;
     let modified = header(&first, "last-modified").to_owned();
     assert!(!modified.is_empty());
@@ -108,7 +108,7 @@ async fn not_modified_hashed_asset_stays_immutable() {
 
 #[tokio::test]
 async fn build_metadata_is_not_immutable() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     let r = get(&app, "/_nuxt/builds/latest.json").await;
     assert_eq!(r.status, 200);
     assert_eq!(header(&r, "cache-control"), "no-cache");
@@ -116,7 +116,7 @@ async fn build_metadata_is_not_immutable() {
 
 #[tokio::test]
 async fn spa_fallback_for_client_routes() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     for uri in [
         "/printers/mk4",
         "/consent?request=abc",
@@ -131,7 +131,7 @@ async fn spa_fallback_for_client_routes() {
 
 #[tokio::test]
 async fn head_on_client_route() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     let r = send(
         &app,
         Request::head("/printers/mk4").body(Body::empty()).unwrap(),
@@ -143,7 +143,7 @@ async fn head_on_client_route() {
 
 #[tokio::test]
 async fn missing_asset_is_404_not_index() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     for uri in ["/_nuxt/old.js", "/missing.png"] {
         let r = get(&app, uri).await;
         assert_eq!(r.status, 404, "{uri}");
@@ -153,10 +153,11 @@ async fn missing_asset_is_404_not_index() {
 
 #[tokio::test]
 async fn reserved_prefixes_never_get_index() {
-    let (app, state, _t) = web_app();
+    let (app, state, _t) = web_app().await;
     let r = send(
         &app,
         authorize(Request::get("/api/does-not-exist"), &state, Role::Admin)
+            .await
             .body(Body::empty())
             .unwrap(),
     )
@@ -184,6 +185,7 @@ async fn reserved_prefixes_never_get_index() {
         let r = send(
             &app,
             authorize(Request::get(uri), &state, Role::Admin)
+                .await
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -199,6 +201,7 @@ async fn reserved_prefixes_never_get_index() {
     let r = send(
         &app,
         authorize(Request::get("/mcp/zzz"), &state, Role::Admin)
+            .await
             .body(Body::empty())
             .unwrap(),
     )
@@ -213,7 +216,7 @@ async fn reserved_prefixes_never_get_index() {
 
 #[tokio::test]
 async fn unauthenticated_unknown_api_path_is_still_401() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     let r = get(&app, "/api/does-not-exist").await;
     assert_eq!(r.status, 401);
     assert!(header(&r, "www-authenticate").contains("resource_metadata"));
@@ -221,7 +224,7 @@ async fn unauthenticated_unknown_api_path_is_still_401() {
 
 #[tokio::test]
 async fn prefix_lookalikes_are_client_routes() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     for uri in ["/apiary", "/oauthx", "/mcpx"] {
         let r = get(&app, uri).await;
         assert_eq!(r.status, 200, "{uri}");
@@ -231,10 +234,11 @@ async fn prefix_lookalikes_are_client_routes() {
 
 #[tokio::test]
 async fn real_routes_still_win() {
-    let (app, state, _t) = web_app();
+    let (app, state, _t) = web_app().await;
     let r = send(
         &app,
         authorize(Request::get("/api/health"), &state, Role::Viewer)
+            .await
             .body(Body::empty())
             .unwrap(),
     )
@@ -248,7 +252,7 @@ async fn real_routes_still_win() {
 
 #[tokio::test]
 async fn non_get_on_ui_path_is_405() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     let r = send(
         &app,
         Request::post("/printers/mk4").body(Body::empty()).unwrap(),
@@ -260,7 +264,7 @@ async fn non_get_on_ui_path_is_405() {
 
 #[tokio::test]
 async fn traversal_does_not_escape() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     for uri in [
         "/../secret.txt",
         "/%2e%2e/secret.txt",
@@ -276,7 +280,7 @@ async fn traversal_does_not_escape() {
 async fn unbuilt_ui_is_503() {
     let tmp = TempDir::new().unwrap();
     let missing = tmp.path().join("nope");
-    let state = state_with(missing.to_str().unwrap());
+    let state = state_with(missing.to_str().unwrap()).await;
     let app = starstar_api::router(state.clone());
     let r = get(&app, "/").await;
     assert_eq!(r.status, 503);
@@ -284,6 +288,7 @@ async fn unbuilt_ui_is_503() {
     let r = send(
         &app,
         authorize(Request::get("/api/health"), &state, Role::Viewer)
+            .await
             .body(Body::empty())
             .unwrap(),
     )
@@ -293,7 +298,7 @@ async fn unbuilt_ui_is_503() {
 
 #[tokio::test]
 async fn security_headers_on_static_and_fallback() {
-    let (app, _, _t) = web_app();
+    let (app, _, _t) = web_app().await;
     for uri in [
         "/",
         "/_nuxt/app.abc123.js",

@@ -21,11 +21,12 @@ async fn call(app: &Router, token: &str, method: &str, uri: &str) -> TestRespons
     .await
 }
 
-fn grant_id_of(state: &starstar_api::AppState, username: &str) -> Vec<String> {
-    let id = state.auth.user_by_name(username).unwrap().unwrap().id;
+async fn grant_id_of(state: &starstar_api::AppState, username: &str) -> Vec<String> {
+    let id = state.auth.user_by_name(username).await.unwrap().unwrap().id;
     state
         .auth
         .list_grants(Some(id))
+        .await
         .unwrap()
         .into_iter()
         .map(|g| g.id)
@@ -34,8 +35,8 @@ fn grant_id_of(state: &starstar_api::AppState, username: &str) -> Vec<String> {
 
 #[tokio::test]
 async fn lists_my_grants_with_client_and_usage() {
-    let (app, state) = test_app();
-    let v = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    let v = token_for(&state, "v", Role::Viewer).await;
     assert_eq!(call(&app, &v, "GET", "/api/me").await.status, 200); // sets last_used_at
     let r = call(&app, &v, "GET", "/api/apps").await;
     assert_eq!(r.status, 200);
@@ -52,10 +53,10 @@ async fn lists_my_grants_with_client_and_usage() {
 
 #[tokio::test]
 async fn users_see_only_their_own_and_admins_see_all() {
-    let (app, state) = test_app();
-    let v = token_for(&state, "v", Role::Viewer);
-    token_for(&state, "o", Role::Operator);
-    let admin = token_for(&state, "boss", Role::Admin);
+    let (app, state) = test_app().await;
+    let v = token_for(&state, "v", Role::Viewer).await;
+    token_for(&state, "o", Role::Operator).await;
+    let admin = token_for(&state, "boss", Role::Admin).await;
     assert_eq!(
         call(&app, &v, "GET", "/api/apps")
             .await
@@ -75,11 +76,11 @@ async fn users_see_only_their_own_and_admins_see_all() {
 
 #[tokio::test]
 async fn revoke_my_grant_kills_its_tokens() {
-    let (app, state) = test_app();
-    let first = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    let first = token_for(&state, "v", Role::Viewer).await;
     state.auth.clock().advance(1); // distinct created_at for ordering
-    let second = token_for(&state, "v", Role::Viewer);
-    let newest = &grant_id_of(&state, "v")[0]; // newest first
+    let second = token_for(&state, "v", Role::Viewer).await;
+    let newest = &grant_id_of(&state, "v").await[0]; // newest first
     assert_eq!(
         call(&app, &first, "DELETE", &format!("/api/apps/{newest}"))
             .await
@@ -98,11 +99,11 @@ async fn revoke_my_grant_kills_its_tokens() {
 
 #[tokio::test]
 async fn cannot_revoke_someone_elses_grant_but_admin_can() {
-    let (app, state) = test_app();
-    let v = token_for(&state, "v", Role::Viewer);
-    let o = token_for(&state, "o", Role::Operator);
-    let admin = token_for(&state, "boss", Role::Admin);
-    let o_grant = &grant_id_of(&state, "o")[0];
+    let (app, state) = test_app().await;
+    let v = token_for(&state, "v", Role::Viewer).await;
+    let o = token_for(&state, "o", Role::Operator).await;
+    let admin = token_for(&state, "boss", Role::Admin).await;
+    let o_grant = &grant_id_of(&state, "o").await[0];
     assert_eq!(
         call(&app, &v, "DELETE", &format!("/api/apps/{o_grant}"))
             .await
@@ -121,33 +122,36 @@ async fn cannot_revoke_someone_elses_grant_but_admin_can() {
 
 #[tokio::test]
 async fn deleting_a_grant_cascades_to_its_token_rows() {
-    let (app, state) = test_app();
-    let v = token_for(&state, "v", Role::Viewer);
-    assert_eq!(state.auth.token_hashes().len(), 2);
-    let g = &grant_id_of(&state, "v")[0];
+    let (app, state) = test_app().await;
+    let v = token_for(&state, "v", Role::Viewer).await;
+    assert_eq!(state.auth.token_hashes().await.len(), 2);
+    let g = &grant_id_of(&state, "v").await[0];
     assert_eq!(
         call(&app, &v, "DELETE", &format!("/api/apps/{g}"))
             .await
             .status,
         204
     );
-    assert!(state.auth.token_hashes().is_empty());
+    assert!(state.auth.token_hashes().await.is_empty());
 }
 
 #[tokio::test]
 async fn last_used_is_throttled() {
-    let (app, state) = test_app();
-    let v = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    let v = token_for(&state, "v", Role::Viewer).await;
     let last_used = |state: &starstar_api::AppState| {
-        let id = state.auth.user_by_name("v").unwrap().unwrap().id;
-        state.auth.list_grants(Some(id)).unwrap()[0].last_used_at
+        let state = state.clone();
+        async move {
+            let id = state.auth.user_by_name("v").await.unwrap().unwrap().id;
+            state.auth.list_grants(Some(id)).await.unwrap()[0].last_used_at
+        }
     };
     call(&app, &v, "GET", "/api/me").await;
-    assert_eq!(last_used(&state), Some(TEST_START));
+    assert_eq!(last_used(&state).await, Some(TEST_START));
     state.auth.clock().advance(30);
     call(&app, &v, "GET", "/api/me").await;
-    assert_eq!(last_used(&state), Some(TEST_START));
+    assert_eq!(last_used(&state).await, Some(TEST_START));
     state.auth.clock().advance(31);
     call(&app, &v, "GET", "/api/me").await;
-    assert_eq!(last_used(&state), Some(TEST_START + 61));
+    assert_eq!(last_used(&state).await, Some(TEST_START + 61));
 }

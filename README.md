@@ -13,16 +13,48 @@ starstar manages Prusa MK4 and MINI printers through PrusaLink. It has:
 - an **MCP endpoint** at `/mcp` for AI agents;
 - an **agent skill** that teaches agents to use the CLI.
 
-## Running the API and web UI
+## Running with Compose (recommended for local development)
 
-Build the web UI, then start the API. It listens on `127.0.0.1:8080`, stores data in `starstar.db` and serves `web/.output/public` (set `STARSTAR_WEB_DIR` to change it).
+[`compose.yaml`](compose.yaml) runs PostgreSQL 17 and the API + generated web UI together on loopback (`127.0.0.1:8080`, PostgreSQL on `127.0.0.1:54329`). The credentials and plain HTTP settings in `compose.yaml` are for local development only.
 
 ```sh
-(cd web && npm ci && npx nuxt generate)
-cargo run -p starstar-api
+docker compose up --build -d        # or: podman compose up --build -d
+docker compose logs -f app          # prints the one-time setup code on first start
+docker compose down                 # stop services, keeping the postgres-data volume
+docker compose down -v              # stop services and wipe the local database
 ```
 
-Useful settings: `STARSTAR_BIND`, `STARSTAR_PUBLIC_URL` (the URL clients use, needed for OAuth and MCP), `STARSTAR_DATABASE`. Set `STARSTAR_ALLOW_INSECURE_HTTP=1` to bind a non-loopback address with an `http://` public URL (for example on a LAN).
+Keep a single API replica: pending OAuth authorization requests, rate limiters, and the setup code include in-memory state.
+
+## Running the API and web UI on the host
+
+Start PostgreSQL (for example via Compose), build the web UI, and point `STARSTAR_DATABASE_URL` at PostgreSQL. On startup, the API runs versioned migrations in `schema_migrations` under a schema-scoped advisory lock and refuses to start if the database schema is newer than the binary.
+
+```sh
+docker compose up -d db             # or: podman compose up -d db
+(cd web && npm ci && npx nuxt generate)
+STARSTAR_DATABASE_URL=postgres://starstar:starstar-dev@127.0.0.1:54329/starstar cargo run -p starstar-api
+```
+
+Required and useful settings:
+
+- `STARSTAR_DATABASE_URL`: PostgreSQL connection URL (`postgres://...` or `postgresql://...`, required).
+- `STARSTAR_DB_MAX_CONNECTIONS`: connection pool limit (default `10`, range `1..=100`).
+- `STARSTAR_DB_CONNECT_TIMEOUT_SECS`: startup connection retry budget in seconds (default `30`).
+- `STARSTAR_BIND`: listen address (default `127.0.0.1:8080`).
+- `STARSTAR_PUBLIC_URL`: client-facing origin for OAuth and MCP (default `http://127.0.0.1:8080`).
+- `STARSTAR_ALLOW_INSECURE_HTTP=1`: allow binding a non-loopback address with an `http://` public URL (for example inside a container or on a LAN).
+- `STARSTAR_WEB_DIR`: directory holding the generated UI (default `web/.output/public`).
+- `STARSTAR_SETUP_TOKEN`: optional fixed first-admin setup code (at least 16 characters).
+
+### Running tests
+
+Rust integration tests use isolated temporary PostgreSQL schemas (`starstar_test_*`, cleaned up automatically) against `STARSTAR_TEST_DATABASE_URL`, defaulting to `postgres://starstar:starstar-dev@127.0.0.1:54329/starstar`:
+
+```sh
+docker compose up -d db             # or: podman compose up -d db
+cargo test --workspace
+```
 
 ### First admin
 

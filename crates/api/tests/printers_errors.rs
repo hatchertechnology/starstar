@@ -52,7 +52,8 @@ async fn upstream_503_is_502() {
 #[tokio::test]
 async fn wrong_printer_password_is_502_not_401() {
     let api = TestApi::start().await;
-    api.add_printer("bad", &api.fake.addr.to_string(), "wrong");
+    api.add_printer("bad", &api.fake.addr.to_string(), "wrong")
+        .await;
     let r = api.get(Role::Viewer, "/api/printers/bad/status").await;
     assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{}", r.text());
     let error = r.json()["error"].as_str().unwrap().to_owned();
@@ -78,7 +79,7 @@ async fn slow_printer_times_out_with_504() {
 #[tokio::test]
 async fn unreachable_printer_is_502() {
     let api = TestApi::start().await;
-    api.add_printer("gone", "127.0.0.1:1", "x");
+    api.add_printer("gone", "127.0.0.1:1", "x").await;
     let started = Instant::now();
     let r = api.get(Role::Viewer, "/api/printers/gone/status").await;
     assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{}", r.text());

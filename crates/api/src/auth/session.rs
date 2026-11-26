@@ -96,7 +96,7 @@ async fn login(
     }
 
     let auth = &state.auth;
-    let user = auth.user_by_name(&req.username.to_lowercase())?;
+    let user = auth.user_by_name(&req.username.to_lowercase()).await?;
     let password = req.password;
     let verified = match &user {
         Some(user) => {
@@ -124,7 +124,7 @@ async fn login(
     limiter.reset(&key);
     ip_limiter.refund(&ip);
     user_limiter.refund(&user_key);
-    let session = state.auth.create_session(user.id)?;
+    let session = state.auth.create_session(user.id).await?;
     let info = SessionInfo {
         username: user.username,
         role: user.role,
@@ -138,7 +138,7 @@ async fn login(
 }
 
 async fn show(State(state): State<AppState>, parts: Parts) -> Result<Json<SessionInfo>, ApiError> {
-    let session = session_from_parts(&parts, &state)?;
+    let session = session_from_parts(&parts, &state).await?;
     Ok(Json(SessionInfo {
         username: session.caller.username,
         role: session.caller.role,
@@ -152,7 +152,7 @@ async fn logout(State(state): State<AppState>, parts: Parts) -> Result<Response,
         return Err(ApiError::BadRequest("no browser session".to_owned()));
     }
     if let Some(token) = get_cookie(&parts.headers, SESSION_COOKIE) {
-        state.auth.delete_session(&token)?;
+        state.auth.delete_session(&token).await?;
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
     for cookie in clear_session_cookies(&state.config) {

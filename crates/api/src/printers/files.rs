@@ -23,7 +23,7 @@ pub async fn file_info(
     path: Option<&str>,
 ) -> Result<FileEntry, ApiError> {
     caller.require(FILE_INFO_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let segments = path.map(file_segments).transpose()?.unwrap_or_default();
     let client = client(state, &printer);
     let storage = resolve_storage(&client, storage).await?;
@@ -39,7 +39,7 @@ pub async fn file_state(
     path: &str,
 ) -> Result<FileState, ApiError> {
     caller.require(FILE_STATE_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let segments = file_segments(path)?;
     let client = client(state, &printer);
     let storage = resolve_storage(&client, storage).await?;
@@ -59,7 +59,7 @@ pub async fn print_file(
     path: &str,
 ) -> Result<(), ApiError> {
     caller.require(PRINT_FILE_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let segments = file_segments(path)?;
     let client = client(state, &printer);
     let storage = resolve_storage(&client, storage).await?;
@@ -75,7 +75,7 @@ pub async fn delete_file(
     opts: DeleteOptions,
 ) -> Result<(), ApiError> {
     caller.require(DELETE_FILE_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let segments = file_segments(path)?;
     let client = client(state, &printer);
     let storage = resolve_storage(&client, storage).await?;
@@ -124,7 +124,7 @@ pub async fn upload_file(
     if upload.length > max {
         return Err(ApiError::PayloadTooLarge(too_large_message(max)));
     }
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let segments = file_segments(path)?;
     let client = client(state, &printer);
     let storage = resolve_storage(&client, storage).await?;

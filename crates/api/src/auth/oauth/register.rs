@@ -105,7 +105,10 @@ async fn register(
     }
 
     let name = sanitize_name(req.client_name.as_deref());
-    let client = state.auth.register_client(&name, &req.redirect_uris)?;
+    let client = state
+        .auth
+        .register_client(&name, &req.redirect_uris)
+        .await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({

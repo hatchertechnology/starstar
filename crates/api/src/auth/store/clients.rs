@@ -1,6 +1,8 @@
 //! OAuth clients: the seeded `starstar-cli` plus dynamically registered ones.
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use sqlx::postgres::PgRow;
+use sqlx::types::Json;
+use sqlx::{PgExecutor, Row};
 use starstar_shared::auth::CLI_CLIENT_ID;
 
 use super::{AuthStore, AuthStoreError};
@@ -15,50 +17,52 @@ pub struct ClientRecord {
     pub created_at: i64,
 }
 
-fn row_to_client(row: &Row<'_>) -> rusqlite::Result<ClientRecord> {
-    let uris: String = row.get(2)?;
-    let redirect_uris = serde_json::from_str(&uris).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
-    })?;
+fn row_to_client(row: &PgRow) -> Result<ClientRecord, AuthStoreError> {
+    let Json(redirect_uris): Json<Vec<String>> = row.try_get(2)?;
     Ok(ClientRecord {
-        id: row.get(0)?,
-        name: row.get(1)?,
+        id: row.try_get(0)?,
+        name: row.try_get(1)?,
         redirect_uris,
-        seeded: row.get::<_, i64>(3)? != 0,
-        created_at: row.get(4)?,
+        seeded: row.try_get(3)?,
+        created_at: row.try_get(4)?,
     })
 }
 
-pub(crate) fn client_in(
-    conn: &Connection,
+pub(crate) async fn client_in<'e, E: PgExecutor<'e>>(
+    exec: E,
     id: &str,
 ) -> Result<Option<ClientRecord>, AuthStoreError> {
-    Ok(conn
-        .query_row(
-            "SELECT id, name, redirect_uris, seeded, created_at FROM oauth_clients WHERE id = ?1",
-            params![id],
-            row_to_client,
-        )
-        .optional()?)
+    let row = sqlx::query(
+        "SELECT id, name, redirect_uris, seeded, created_at FROM oauth_clients WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(exec)
+    .await?;
+    row.as_ref().map(row_to_client).transpose()
 }
 
 impl AuthStore {
     /// Inserts `starstar-cli` if it is missing.
-    pub(crate) fn seed_clients(&self) -> Result<(), AuthStoreError> {
-        let uris = serde_json::to_string(&[
-            "http://127.0.0.1/callback",
-            "http://localhost/callback",
-            "http://[::1]/callback",
-        ])
-        .expect("a string array serializes");
-        self.db.conn().execute(
-            "INSERT OR IGNORE INTO oauth_clients (id, name, redirect_uris, seeded, created_at) VALUES (?1, 'starstar CLI', ?2, 1, ?3)",
-            params![CLI_CLIENT_ID, uris, self.now()],
-        )?;
+    pub(crate) async fn seed_clients(&self) -> Result<(), AuthStoreError> {
+        let uris = vec![
+            "http://127.0.0.1/callback".to_owned(),
+            "http://localhost/callback".to_owned(),
+            "http://[::1]/callback".to_owned(),
+        ];
+        sqlx::query(
+            "INSERT INTO oauth_clients (id, name, redirect_uris, seeded, created_at)
+             VALUES ($1, 'starstar CLI', $2, TRUE, $3)
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(CLI_CLIENT_ID)
+        .bind(Json(uris))
+        .bind(self.now())
+        .execute(self.db.pool())
+        .await?;
         Ok(())
     }
 
-    pub fn register_client(
+    pub async fn register_client(
         &self,
         name: &str,
         redirect_uris: &[String],
@@ -70,15 +74,20 @@ impl AuthStore {
             seeded: false,
             created_at: self.now(),
         };
-        let uris = serde_json::to_string(redirect_uris).expect("a string array serializes");
-        self.db.conn().execute(
-            "INSERT INTO oauth_clients (id, name, redirect_uris, seeded, created_at) VALUES (?1, ?2, ?3, 0, ?4)",
-            params![record.id, record.name, uris, record.created_at],
-        )?;
+        sqlx::query(
+            "INSERT INTO oauth_clients (id, name, redirect_uris, seeded, created_at)
+             VALUES ($1, $2, $3, FALSE, $4)",
+        )
+        .bind(&record.id)
+        .bind(&record.name)
+        .bind(Json(redirect_uris))
+        .bind(record.created_at)
+        .execute(self.db.pool())
+        .await?;
         Ok(record)
     }
 
-    pub fn client(&self, id: &str) -> Result<Option<ClientRecord>, AuthStoreError> {
-        client_in(&self.db.conn(), id)
+    pub async fn client(&self, id: &str) -> Result<Option<ClientRecord>, AuthStoreError> {
+        client_in(self.db.pool(), id).await
     }
 }

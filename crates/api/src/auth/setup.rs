@@ -27,7 +27,7 @@ async fn setup(
     Json(req): Json<SetupRequest>,
 ) -> Result<Response, ApiError> {
     let auth = &state.auth;
-    if auth.user_count()? > 0 {
+    if auth.user_count().await? > 0 {
         return Err(ApiError::Conflict(
             "setup is closed: an admin already exists".to_owned(),
         ));
@@ -50,11 +50,11 @@ async fn setup(
     validate_password(&req.password)?;
 
     let hash = auth.hash_password(req.password).await?;
-    let user = auth.create_first_admin(&req.username, &hash)?;
+    let user = auth.create_first_admin(&req.username, &hash).await?;
 
     auth.set_setup_code(None);
     auth.setup_limiter().reset(&ip);
-    let session = auth.create_session(user.id)?;
+    let session = auth.create_session(user.id).await?;
     let info = SessionInfo {
         username: user.username,
         role: user.role,

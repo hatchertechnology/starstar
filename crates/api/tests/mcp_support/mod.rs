@@ -12,11 +12,11 @@ use crate::fake_prusalink::{TestApi, TestResponse};
 pub const HOST: &str = "127.0.0.1:8080";
 
 /// A bearer token for a fresh user with `role`.
-pub fn token(api: &TestApi, role: Role) -> String {
+pub async fn token(api: &TestApi, role: Role) -> String {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let n = NEXT.fetch_add(1, Ordering::SeqCst);
-    common::token_for(&api.state, &format!("mcp-{role}-{n}"), role)
+    common::token_for(&api.state, &format!("mcp-{role}-{n}"), role).await
 }
 
 pub fn rpc_body(method: &str, params: Value) -> Value {

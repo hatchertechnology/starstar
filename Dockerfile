@@ -14,12 +14,11 @@ RUN cargo build --locked --release -p starstar-api
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --create-home starstar \
-    && mkdir /data && chown starstar:starstar /data
+    && useradd --system --uid 10001 --create-home starstar
 WORKDIR /app
 COPY --from=api /src/target/release/starstar-api /usr/local/bin/starstar-api
 COPY --from=web /src/web/.output/public /app/public
-ENV STARSTAR_BIND=0.0.0.0:8080 STARSTAR_WEB_DIR=/app/public STARSTAR_DATABASE=/data/starstar.db
+ENV STARSTAR_BIND=0.0.0.0:8080 STARSTAR_WEB_DIR=/app/public
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["starstar-api"]

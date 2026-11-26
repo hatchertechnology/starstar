@@ -17,7 +17,7 @@ pub enum ApiError {
     BadRequest(String),
     /// No credentials, or credentials that are invalid or expired.
     Unauthorized(String),
-    /// Authenticated, but the caller's role is too low.
+    /// 403 for a check that is not about roles: CSRF, setup code, current password.
     Forbidden(String),
     /// 403 because the caller's role is below what the action needs. Like
     /// [`ApiError::Forbidden`], plus a `WWW-Authenticate: Bearer
@@ -35,7 +35,7 @@ pub enum ApiError {
     /// permits exhausted).
     ServiceUnavailable(String),
     /// The printer answered with an error status that is passed on as-is
-    /// (404, 409, 403 from PrusaLink). Distinct from [`ApiError::Forbidden`],
+    /// (404, 409, 403 from PrusaLink). Distinct from [`ApiError::InsufficientRole`],
     /// which is about the caller's starstar role.
     Printer(StatusCode, String),
     /// 504: the printer did not answer in time.

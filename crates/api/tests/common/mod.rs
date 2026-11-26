@@ -24,9 +24,9 @@ use starstar_api::{AppState, router};
 use starstar_shared::Role;
 use tower::ServiceExt;
 
-/// A fresh in-memory state with default config.
 pub const TEST_START: i64 = 1_800_000_000;
 
+/// A fresh in-memory state with default config.
 pub fn test_state() -> AppState {
     let db = Db::open_in_memory().unwrap();
     AppState {

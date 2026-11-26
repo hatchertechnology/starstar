@@ -26,10 +26,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let hasher = Hasher::secure();
+    // Compute the unknown-user dummy hash now, not on the first bad login.
+    hasher.prewarm();
     let db = Db::open(&config.database)?;
     let state = AppState {
         store: Arc::new(PrinterStore::from_db(db.clone())),
-        auth: Arc::new(AuthStore::new(db, Clock::system(), Hasher::secure())?),
+        auth: Arc::new(AuthStore::new(db, Clock::system(), hasher)?),
         http: http_client()?,
         config: Arc::new(config.clone()),
     };

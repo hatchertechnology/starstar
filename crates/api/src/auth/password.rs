@@ -64,20 +64,34 @@ impl Hasher {
         }
     }
 
+    fn dummies() -> &'static Mutex<DummyHashes> {
+        static DUMMIES: OnceLock<Mutex<DummyHashes>> = OnceLock::new();
+        DUMMIES.get_or_init(Default::default)
+    }
+
+    fn dummy_key(&self) -> (u32, u32, u32) {
+        (self.m_cost, self.t_cost, self.p_cost)
+    }
+
+    fn dummy_phc(&self) -> String {
+        Self::dummies()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(self.dummy_key())
+            .or_insert_with(|| self.hash("dummy password for timing"))
+            .clone()
+    }
+
+    /// Computes the dummy hash now, so the first unknown-user sign-in is not
+    /// slower than the rest. Call once at startup.
+    pub fn prewarm(&self) {
+        let _ = self.dummy_phc();
+    }
+
     /// Spends the same time as a real verification, so a missing user is not
     /// distinguishable by timing.
     pub fn dummy_verify(&self, password: &str) {
-        static DUMMIES: OnceLock<Mutex<DummyHashes>> = OnceLock::new();
-        let key = (self.m_cost, self.t_cost, self.p_cost);
-        let phc = {
-            let mut map = DUMMIES
-                .get_or_init(Default::default)
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            map.entry(key)
-                .or_insert_with(|| self.hash("dummy password for timing"))
-                .clone()
-        };
+        let phc = self.dummy_phc();
         let _ = self.verify(password, &phc);
     }
 }
@@ -110,6 +124,25 @@ mod tests {
         assert!(!h.verify("wrong", &phc));
         assert!(!h.verify("x", "not a hash"));
         h.dummy_verify("anything");
+    }
+
+    #[test]
+    fn prewarm_computes_the_dummy_hash_up_front() {
+        // Cost parameters no other test uses, so nothing cached them already.
+        let h = Hasher {
+            m_cost: 9,
+            t_cost: 1,
+            p_cost: 1,
+        };
+        let cached = |h: &Hasher| {
+            Hasher::dummies()
+                .lock()
+                .unwrap()
+                .contains_key(&h.dummy_key())
+        };
+        assert!(!cached(&h));
+        h.prewarm();
+        assert!(cached(&h));
     }
 
     #[test]

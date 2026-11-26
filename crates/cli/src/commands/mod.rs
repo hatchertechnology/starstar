@@ -53,6 +53,16 @@ pub fn read_secret(prompt: &str, from_stdin: bool) -> CliResult<String> {
     }
 }
 
+/// Reads the code pasted during `login --no-browser`. On a terminal it is read
+/// without echo (`silent`); from a pipe, as one line (`line`).
+pub fn read_pasted_code(
+    is_tty: bool,
+    silent: impl FnOnce() -> std::io::Result<String>,
+    line: impl FnOnce() -> std::io::Result<String>,
+) -> std::io::Result<String> {
+    if is_tty { silent() } else { line() }
+}
+
 /// The API's password rule, checked early so a bad one sends nothing.
 pub fn check_password(password: &str) -> CliResult<()> {
     if (8..=256).contains(&password.chars().count()) {
@@ -87,5 +97,36 @@ pub fn dispatch(cli: Cli, out: Output) -> CliResult<()> {
         Command::Files(c) => files::run(&ctx, c),
         Command::Job(c) => jobs::run_job(&ctx, c),
         Command::Transfer(c) => jobs::run_transfer(&ctx, c),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::read_pasted_code;
+
+    #[test]
+    fn pasted_code_is_read_without_echo_on_a_terminal() {
+        let got = read_pasted_code(
+            true,
+            || Ok("from-silent".to_owned()),
+            || panic!("a terminal must not use the echoing reader"),
+        )
+        .unwrap();
+        assert_eq!(got, "from-silent");
+    }
+
+    #[test]
+    fn pasted_code_is_read_as_a_line_from_a_pipe() {
+        let got = read_pasted_code(
+            false,
+            || panic!("a pipe has no terminal to silence"),
+            || Ok("from-line\n".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(got, "from-line\n");
+        let err = read_pasted_code(false, || unreachable!(), || Err(io::Error::other("boom")));
+        assert!(err.is_err());
     }
 }

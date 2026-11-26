@@ -1,6 +1,6 @@
 //! Account commands: status, login, logout, whoami, setup.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use serde_json::json;
@@ -8,7 +8,7 @@ use starstar_shared::auth::{SessionInfo, SetupRequest, WhoAmI};
 use starstar_shared::{Health, Role};
 use url::Url;
 
-use super::{Ctx, read_secret, stdin_line};
+use super::{Ctx, read_pasted_code, read_secret, stdin_line};
 use crate::client::{ApiClient, build_http};
 use crate::credentials::{CredentialStore, default_path, server_key};
 use crate::endpoints;
@@ -103,9 +103,17 @@ pub fn login(ctx: &Ctx, no_browser: bool, role: Role) -> CliResult<()> {
                 "Open this URL on any device, sign in and approve:\n  {url}\nThen paste the code it shows here: "
             )?;
             err.flush()?;
-            let mut line = String::new();
-            io::stdin().read_line(&mut line)?;
-            Ok(line)
+            let tty = io::stdin().is_terminal();
+            let code = read_pasted_code(tty, rpassword::read_password, || {
+                let mut line = String::new();
+                io::stdin().read_line(&mut line)?;
+                Ok(line)
+            })?;
+            if tty {
+                // The silent read leaves the cursor on the prompt line.
+                writeln!(err)?;
+            }
+            Ok(code)
         };
         return login_with(
             &ctx.api,

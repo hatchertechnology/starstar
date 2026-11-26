@@ -351,6 +351,18 @@ fn valid_id(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// App (grant) ids are 1-64 of `[A-Za-z0-9_-]`, which also keeps `.` and `..`
+/// out of the DELETE path.
+pub fn validate_app_id(id: &str) -> CliResult<()> {
+    if valid_id(id) {
+        Ok(())
+    } else {
+        Err(CliError::Usage(format!(
+            "invalid app id `{id}`: use 1-64 letters, digits, '_' or '-'"
+        )))
+    }
+}
+
 /// Camera ids are 1-64 of `[A-Za-z0-9_-]`. `order` and `snap` are taken by
 /// static API routes, so a camera cannot have those ids.
 pub fn validate_camera_id(id: &str) -> CliResult<()> {

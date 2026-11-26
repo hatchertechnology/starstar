@@ -198,6 +198,7 @@ pub fn run_apps(ctx: &Ctx, command: AppsCommand) -> CliResult<()> {
             });
         }
         AppsCommand::Revoke { id } => {
+            endpoints::validate_app_id(&id)?;
             ctx.client()?
                 .send_empty(&endpoints::revoke_app(&id), None)?;
             ctx.out.emit(&json!({"id": id, "action": "revoke"}), || {

@@ -188,3 +188,21 @@ fn apps_revoke() {
     assert_eq!(out.json()["action"], "revoke");
     assert_eq!(fake.find("DELETE", "/api/apps/ss_gr_1").len(), 1);
 }
+
+#[test]
+fn apps_revoke_refuses_malformed_ids_before_any_request() {
+    let fake = FakeApi::start();
+    let h = tempfile::tempdir().unwrap();
+    let too_long = "a".repeat(65);
+    for bad in ["..", ".", "a/b", "a b", "é", too_long.as_str()] {
+        let out = run(tok(&fake, h.path()).args(["apps", "revoke", bad]));
+        assert_eq!(out.code, 2, "{bad:?}: {}", out.stderr);
+        assert!(out.stderr.contains("invalid app id"), "{}", out.stderr);
+    }
+    assert!(fake.requests().is_empty());
+    let ok = "g".repeat(64);
+    let out = run(tok(&fake, h.path()).args(["apps", "revoke", &ok]));
+    // The fake does not know this grant (404, exit 1), but the id is accepted.
+    assert_ne!(out.code, 2, "{}", out.stderr);
+    assert_eq!(fake.find("DELETE", &format!("/api/apps/{ok}")).len(), 1);
+}

@@ -138,3 +138,87 @@ async fn operations_enforce_their_role_without_http() {
     assert!(matches!(err, ApiError::Forbidden(_)));
     assert!(api.fake.authorized(Method::DELETE).is_empty());
 }
+
+#[tokio::test]
+async fn shows_transfer_with_id_from_status() {
+    let api = TestApi::start().await;
+    let r = api.get(Role::Viewer, "/api/printers/mk4/transfer").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let t = r.json();
+    assert_eq!(t["id"], 7);
+    assert_eq!(t["kind"], "FROM_CLIENT");
+    assert_eq!(t["size"], 2048);
+    assert_eq!(t["to_print"], false);
+    assert_eq!(t["display_name"], "big.bgcode");
+    assert_eq!(t["transferred"], 1024);
+}
+
+#[tokio::test]
+async fn transfer_size_as_string_decodes() {
+    let api = TestApi::start().await;
+    api.fake.set(
+        Method::GET,
+        "/api/v1/transfer",
+        Canned::json(
+            200,
+            json!({"id":7,"type":"FROM_CLIENT","display_name":"big.bgcode","path":"/usb","size":"2048"}),
+        ),
+    );
+    let r = api.get(Role::Viewer, "/api/printers/mk4/transfer").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["size"], 2048);
+    // The body carried an id, so no status lookup was needed.
+    assert!(
+        !api.fake
+            .requests()
+            .iter()
+            .any(|q| q.uri == "/api/v1/status")
+    );
+}
+
+#[tokio::test]
+async fn no_transfer_is_204() {
+    let api = TestApi::start().await;
+    api.fake
+        .set(Method::GET, "/api/v1/transfer", Canned::empty(204));
+    let r = api.get(Role::Viewer, "/api/printers/mk4/transfer").await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert!(r.body.is_empty());
+}
+
+#[tokio::test]
+async fn cancels_transfer() {
+    let api = TestApi::start().await;
+    let r = api
+        .call(
+            Role::Operator,
+            Method::DELETE,
+            "/api/printers/mk4/transfer/7",
+            &[],
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text());
+    assert!(
+        api.fake
+            .authorized(Method::DELETE)
+            .iter()
+            .any(|q| q.uri == "/api/v1/transfer/7")
+    );
+}
+
+#[tokio::test]
+async fn cancel_unknown_transfer_is_404() {
+    let api = TestApi::start().await;
+    let r = api
+        .call(
+            Role::Operator,
+            Method::DELETE,
+            "/api/printers/mk4/transfer/8",
+            &[],
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(r.json()["error"].as_str().unwrap().contains("not found"));
+}

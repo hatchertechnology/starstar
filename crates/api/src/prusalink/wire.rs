@@ -1,7 +1,7 @@
 //! Serde structs matching the JSON that PrusaLink sends and receives.
 
 use serde::Deserialize;
-use starstar_shared::{Job, JobFile, PrintMeta};
+use starstar_shared::{Job, JobFile, PrintMeta, Transfer};
 
 /// `GET /api/version`
 #[derive(Debug, Deserialize)]
@@ -176,6 +176,69 @@ impl From<WireJob> for Job {
             inaccurate_estimates: j.inaccurate_estimates,
             serial_print: j.serial_print,
             file: j.file.map(JobFile::from),
+        }
+    }
+}
+
+/// Reads a size sent as a number or as a numeric string.
+fn number_or_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Int(u64),
+        Float(f64),
+        Text(String),
+    }
+    Option::<Value>::deserialize(d)?
+        .map(|v| match v {
+            Value::Int(n) => Ok(n),
+            Value::Float(f) => seconds(f).ok_or_else(|| serde::de::Error::custom("bad size")),
+            Value::Text(s) => s.trim().parse().map_err(serde::de::Error::custom),
+        })
+        .transpose()
+}
+
+/// `GET /api/v1/transfer`. The upstream body may lack `id`.
+#[derive(Debug, Deserialize)]
+pub struct WireTransfer {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default, deserialize_with = "number_or_string")]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub progress: f64,
+    #[serde(default)]
+    pub transferred: u64,
+    #[serde(default)]
+    pub time_remaining: Option<i64>,
+    #[serde(default)]
+    pub time_transferring: u64,
+    #[serde(default)]
+    pub to_print: bool,
+}
+
+impl From<WireTransfer> for Transfer {
+    fn from(t: WireTransfer) -> Self {
+        Self {
+            id: t.id,
+            kind: t.kind,
+            display_name: t.display_name,
+            path: t.path,
+            url: t.url,
+            size: t.size,
+            progress: t.progress,
+            transferred: t.transferred,
+            time_remaining: t.time_remaining.and_then(|v| u64::try_from(v).ok()),
+            time_transferring: t.time_transferring,
+            to_print: t.to_print,
         }
     }
 }

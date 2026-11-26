@@ -10,7 +10,7 @@ use starstar_shared::{PrinterInfo, PrinterStatus, PrinterSummary, RegisterPrinte
 use crate::AppState;
 use crate::auth::{Admin, Operator, Viewer};
 use crate::error::ApiError;
-use crate::printers::{jobs, registry, telemetry};
+use crate::printers::{jobs, registry, telemetry, transfer};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -27,6 +27,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/printers/{name}/job/{id}/pause", put(pause_job))
         .route("/api/printers/{name}/job/{id}/resume", put(resume_job))
         .route("/api/printers/{name}/job/{id}/continue", put(continue_job))
+        .route("/api/printers/{name}/transfer", get(current_transfer))
+        .route(
+            "/api/printers/{name}/transfer/{id}",
+            delete(cancel_transfer),
+        )
 }
 
 async fn list_printers(
@@ -134,5 +139,27 @@ async fn continue_job(
     Path((name, id)): Path<(String, u64)>,
 ) -> Result<StatusCode, ApiError> {
     jobs::continue_job(&state, &caller, &name, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn current_transfer(
+    Viewer(caller): Viewer,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Response, ApiError> {
+    Ok(
+        match transfer::current_transfer(&state, &caller, &name).await? {
+            Some(t) => Json(t).into_response(),
+            None => StatusCode::NO_CONTENT.into_response(),
+        },
+    )
+}
+
+async fn cancel_transfer(
+    Operator(caller): Operator,
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, u64)>,
+) -> Result<StatusCode, ApiError> {
+    transfer::cancel_transfer(&state, &caller, &name, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

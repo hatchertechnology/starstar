@@ -61,3 +61,24 @@ pub struct PrintMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filament_used_mm: Option<f64>,
 }
+
+/// A file transfer to the printer in progress.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Transfer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    /// Upstream `type`, e.g. `FROM_CLIENT`.
+    pub kind: String,
+    pub display_name: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    pub progress: f64,
+    pub transferred: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_remaining: Option<u64>,
+    pub time_transferring: u64,
+    pub to_print: bool,
+}

@@ -224,6 +224,19 @@ impl PrusaLinkClient {
         self.job_action(Method::PUT, id, Some("continue")).await
     }
 
+    /// The running transfer, or `None` when there is none.
+    pub async fn transfer(&self) -> Result<Option<WireTransfer>, PrusaError> {
+        self.get_optional_json(&["api", "v1", "transfer"]).await
+    }
+
+    pub async fn cancel_transfer(&self, id: u64) -> Result<(), PrusaError> {
+        let id = id.to_string();
+        let url = self.endpoint(&["api", "v1", "transfer", id.as_str()])?;
+        self.send(Method::DELETE, url, HeaderMap::new(), None)
+            .await?;
+        Ok(())
+    }
+
     async fn job_action(
         &self,
         method: Method,

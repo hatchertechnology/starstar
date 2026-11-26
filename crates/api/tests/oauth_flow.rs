@@ -334,6 +334,58 @@ async fn authorize_rejects_redirect_onto_own_origin() {
 }
 
 #[tokio::test]
+async fn authorize_is_limited_per_ip() {
+    let (app, state) = test_app();
+    let (_, ch) = pkce();
+    for i in 0..30 {
+        let r = get(&app, &authorize_uri("starstar-cli", CB, &ch, "")).await;
+        assert_eq!(r.status, 303, "request {i}");
+    }
+    let r = get(&app, &authorize_uri("starstar-cli", CB, &ch, "")).await;
+    assert_eq!(r.status, 429);
+    assert_eq!(r.json()["error"], "invalid_request");
+    state.auth.clock().advance(601);
+    let r = get(&app, &authorize_uri("starstar-cli", CB, &ch, "")).await;
+    assert_eq!(r.status, 303);
+}
+
+#[tokio::test]
+async fn oversized_state_and_resource_are_invalid_requests() {
+    let (app, state) = test_app();
+    let (_, ch) = pkce();
+    let base = |extra: &str| authorize_uri("starstar-cli", CB, &ch, extra);
+
+    // `state=xyz` is already in the base URI; send the long one instead.
+    let long_state = format!(
+        "/oauth/authorize?response_type=code&client_id=starstar-cli&redirect_uri={}&code_challenge={ch}&code_challenge_method=S256&state={}",
+        urlencode(CB),
+        "s".repeat(1025)
+    );
+    let r = get(&app, &long_state).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(r.json()["error"], "invalid_request");
+    assert!(r.headers.get("location").is_none());
+    assert_eq!(state.auth.pending_len(), 0);
+
+    let ok_state = long_state.replace(&"s".repeat(1025), &"s".repeat(1024));
+    assert_eq!(get(&app, &ok_state).await.status, 303);
+
+    let public = "http://127.0.0.1:8080/";
+    let long_resource = base(&format!(
+        "&resource={}",
+        urlencode(&format!("{public}{}", "r".repeat(520)))
+    ));
+    let r = get(&app, &long_resource).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(r.json()["error"], "invalid_request");
+    let ok_resource = base(&format!(
+        "&resource={}",
+        urlencode(&format!("{public}{}", "r".repeat(400)))
+    ));
+    assert_eq!(get(&app, &ok_resource).await.status, 303);
+}
+
+#[tokio::test]
 async fn pkce_and_response_type_errors_redirect() {
     let (app, _) = test_app();
     let (_, ch) = pkce();
@@ -419,7 +471,11 @@ async fn pending_request_expires() {
 async fn pending_requests_are_capped() {
     let (app, state) = test_app();
     let (_, ch) = pkce();
-    for _ in 0..1000 {
+    for i in 0..1000 {
+        if i % 30 == 0 {
+            // The per-IP limiter is tested on its own; keep it out of this one.
+            state.auth.authorize_limiter().reset("unknown");
+        }
         assert_eq!(
             get(&app, &authorize_uri("starstar-cli", CB, &ch, ""))
                 .await
@@ -427,10 +483,12 @@ async fn pending_requests_are_capped() {
             303
         );
     }
+    state.auth.authorize_limiter().reset("unknown");
     let r = get(&app, &authorize_uri("starstar-cli", CB, &ch, "")).await;
     assert_eq!(r.status, 503);
     assert_eq!(r.json()["error"], "temporarily_unavailable");
     state.auth.clock().advance(601);
+    state.auth.authorize_limiter().reset("unknown");
     assert_eq!(
         get(&app, &authorize_uri("starstar-cli", CB, &ch, ""))
             .await

@@ -19,6 +19,7 @@ use url::Url;
 use super::OAuthError;
 use super::redirect::redirect_allowed;
 use crate::AppState;
+use crate::auth::client_ip::client_ip;
 use crate::auth::crypto::{ct_eq, is_valid_pkce_challenge};
 use crate::auth::session_from_parts;
 use crate::auth::store::codes::{CodeParams, PendingAuthorization, requested_role};
@@ -43,6 +44,11 @@ struct AuthorizeQuery {
     scope: Option<String>,
     resource: Option<String>,
 }
+
+/// Longest `state` accepted (1 KiB).
+const MAX_STATE_BYTES: usize = 1024;
+/// Longest `resource` accepted (512 B).
+const MAX_RESOURCE_BYTES: usize = 512;
 
 fn see_other(location: &str) -> Response {
     let mut response = StatusCode::SEE_OTHER.into_response();
@@ -79,6 +85,23 @@ async fn authorize(
     parts: Parts,
     Query(q): Query<AuthorizeQuery>,
 ) -> Result<Response, OAuthError> {
+    let ip = client_ip(&parts, &state.config.trusted_proxies);
+    if !state.auth.authorize_limiter().hit(&ip, state.auth.now()) {
+        return Err(OAuthError::too_many_requests());
+    }
+    // Pending entries live in memory: bound what one request can hold.
+    if q.state
+        .as_deref()
+        .is_some_and(|s| s.len() > MAX_STATE_BYTES)
+    {
+        return Err(OAuthError::invalid_request("state is too long"));
+    }
+    if q.resource
+        .as_deref()
+        .is_some_and(|r| r.len() > MAX_RESOURCE_BYTES)
+    {
+        return Err(OAuthError::invalid_request("resource is too long"));
+    }
     // Errors before the redirect URI is trusted are never redirected.
     let client_id = q
         .client_id

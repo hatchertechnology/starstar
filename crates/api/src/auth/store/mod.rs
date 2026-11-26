@@ -80,6 +80,7 @@ pub struct AuthStore {
     setup_code: Mutex<Option<String>>,
     login_limiter: RateLimiter,
     login_ip_limiter: RateLimiter,
+    authorize_limiter: RateLimiter,
     argon_permits: Arc<Semaphore>,
     setup_limiter: RateLimiter,
     register_limiter: RateLimiter,
@@ -96,6 +97,7 @@ impl AuthStore {
             setup_code: Mutex::new(None),
             login_limiter: RateLimiter::new(5, 900),
             login_ip_limiter: RateLimiter::new(30, 900),
+            authorize_limiter: RateLimiter::new(30, 600),
             argon_permits: Arc::new(Semaphore::new(argon_permit_count())),
             setup_limiter: RateLimiter::new(5, 900),
             register_limiter: RateLimiter::new(20, 3600),
@@ -121,6 +123,12 @@ impl AuthStore {
     /// sign-ins are refunded.
     pub fn login_ip_limiter(&self) -> &RateLimiter {
         &self.login_ip_limiter
+    }
+
+    /// 30 authorize requests per client IP per 600 s (every request counts),
+    /// so one client cannot fill the pending-authorization table.
+    pub fn authorize_limiter(&self) -> &RateLimiter {
+        &self.authorize_limiter
     }
 
     /// The global bound on concurrent argon2 runs. Use [`AuthStore::hash_password`],
@@ -229,6 +237,7 @@ impl AuthStore {
         for limiter in [
             &self.login_limiter,
             &self.login_ip_limiter,
+            &self.authorize_limiter,
             &self.setup_limiter,
             &self.register_limiter,
             &self.token_limiter,

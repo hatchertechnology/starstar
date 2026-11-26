@@ -56,7 +56,7 @@ Authenticate in the client; it opens a browser for sign-in. Tools are listed per
 ## Agent skill
 
 ```sh
-npx skills add kerryhatcher/starstar
+npx skills add hatchertechnology/starstar
 ```
 
 The skill at [`skills/starstar`](skills/starstar/SKILL.md) covers the CLI, the model, slice and print loop, monitoring, and the safety rules agents follow (agents get the operator role, not admin).

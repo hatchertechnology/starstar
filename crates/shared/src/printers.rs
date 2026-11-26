@@ -125,7 +125,7 @@ pub struct FileState {
 /// Options for deleting a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DeleteOptions {
-    /// Delete even if the file is read-only or in use.
+    /// Delete a folder even if it is not empty.
     #[serde(default)]
     pub force: bool,
 }

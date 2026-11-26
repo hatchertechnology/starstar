@@ -23,7 +23,7 @@ Printers heat and move. A wrong command wastes filament or damages hardware.
 ## Install the CLI
 
 ```sh
-cargo install --git https://github.com/kerryhatcher/starstar starstar-cli --locked
+cargo install --git https://github.com/hatchertechnology/starstar starstar-cli --locked
 # or, from a checkout:
 cargo install --path crates/cli --locked
 ```
@@ -61,7 +61,7 @@ starstar files upload mk4 usb/ cube.bgcode --print
 
 `--overwrite` replaces a file of the same name. `<remote>` is `<storage>/<path>`; list storages with `starstar printer storage <name>`.
 
-**First test print:** `prints/cube-12mm/` in a starstar checkout (https://github.com/kerryhatcher/starstar/tree/main/prints/cube-12mm) has a 12 mm cube sliced for the MK4 (`cube-12mm.MK4.bgcode`), MK4S and MINI (`cube-12mm.MINI.bgcode`) with Prusament PLA at 0.20 mm: about 9 minutes on an MK4. Use the file matching the printer.
+**First test print:** `prints/cube-12mm/` in a starstar checkout (https://github.com/hatchertechnology/starstar/tree/main/prints/cube-12mm) has a 12 mm cube sliced for the MK4 (`cube-12mm.MK4.bgcode`), MK4S and MINI (`cube-12mm.MINI.bgcode`) with Prusament PLA at 0.20 mm: about 9 minutes on an MK4. Use the file matching the printer.
 
 ## Monitor
 

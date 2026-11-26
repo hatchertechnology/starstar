@@ -141,7 +141,7 @@ Usage: starstar files rm [OPTIONS] <PRINTER> <REMOTE>
 Arguments:
   <PRINTER>  Printer name
   <REMOTE>   File or folder, e.g. `usb/cube.bgcode`
-      --force              Delete a non-empty folder with everything in it (PrusaLink `Force` header)
+      --force              Delete a folder even if it is not empty
   -y, --yes                Do not ask for confirmation. Required when there is no terminal
 
 === camera

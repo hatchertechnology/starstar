@@ -362,4 +362,14 @@ mod tests {
         let store = PrinterStore::open_in_memory().unwrap();
         assert!(store.get("nope").unwrap().is_none());
     }
+
+    #[test]
+    fn list_returns_printers_sorted_by_name() {
+        let store = PrinterStore::open_in_memory().unwrap();
+        for name in ["zeta", "alpha", "mk4"] {
+            store.insert(printer(name)).unwrap();
+        }
+        let names: Vec<String> = store.list().unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["alpha", "mk4", "zeta"]);
+    }
 }

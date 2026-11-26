@@ -278,3 +278,112 @@ async fn user_creation_and_password_change_wait_for_an_argon2_permit() {
     drop(held);
     assert_eq!(task.await.unwrap(), 201);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_last_admin_deletes_leave_one_enabled_admin() {
+    let (_app, state) = test_app();
+    create_user(&state, "a1", "pw-a1-12345", Role::Admin);
+    create_user(&state, "a2", "pw-a2-12345", Role::Admin);
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+
+    let remove = |target: &'static str, barrier: std::sync::Arc<tokio::sync::Barrier>| {
+        let state = state.clone();
+        tokio::spawn(async move {
+            barrier.wait().await;
+            state.auth.remove_user(target)
+        })
+    };
+
+    let (r1, r2) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(remove("a1", barrier.clone()), remove("a2", barrier))
+    })
+    .await
+    .expect("concurrent deletes hung");
+    let results = [r1.unwrap(), r2.unwrap()];
+    let ok_count = results.iter().filter(|r| r.is_ok()).count();
+    let last_admin_count = results
+        .iter()
+        .filter(|r| matches!(r, Err(starstar_api::auth::store::AuthStoreError::LastAdmin)))
+        .count();
+    assert_eq!((ok_count, last_admin_count), (1, 1));
+
+    let admins: Vec<_> = state
+        .auth
+        .list_users()
+        .unwrap()
+        .into_iter()
+        .filter(|u| u.role == Role::Admin && !u.disabled)
+        .collect();
+    assert_eq!(admins.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_last_admin_disables_and_demotions_leave_one_enabled_admin() {
+    let (app, state) = test_app();
+    let t1 = token_for(&state, "a1", Role::Admin);
+    let t2 = token_for(&state, "a2", Role::Admin);
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+
+    let patch = |token: String,
+                 target: &'static str,
+                 body: Value,
+                 barrier: std::sync::Arc<tokio::sync::Barrier>| {
+        let app = app.clone();
+        tokio::spawn(async move {
+            barrier.wait().await;
+            let req = Request::patch(format!("/api/users/{target}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            send(&app, req).await.status.as_u16()
+        })
+    };
+
+    let (r1, r2) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(
+            patch(t1, "a1", json!({"disabled": true}), barrier.clone()),
+            patch(t2, "a2", json!({"role": "operator"}), barrier),
+        )
+    })
+    .await
+    .expect("concurrent patches hung");
+    let mut statuses = [r1.unwrap(), r2.unwrap()];
+    statuses.sort();
+    assert_eq!(statuses, [200, 409]);
+
+    let admins: Vec<_> = state
+        .auth
+        .list_users()
+        .unwrap()
+        .into_iter()
+        .filter(|u| u.role == Role::Admin && !u.disabled)
+        .collect();
+    assert_eq!(admins.len(), 1);
+}
+
+#[tokio::test]
+async fn password_change_via_bearer_deletes_all_browser_sessions() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let b1 = login(&app, "kerry", "pw-kerry-123").await;
+    let b2 = login(&app, "kerry", "pw-kerry-123").await;
+    let bearer = token_for(&state, "kerry", Role::Viewer);
+
+    let req = Request::put("/api/me/password")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"current_password": "pw-kerry-123", "new_password": "new-pw-12345"}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(send(&app, req).await.status, 204);
+
+    for b in [&b1, &b2] {
+        let me_req = b
+            .cookie_only(Request::get("/api/me"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(&app, me_req).await.status, 401);
+    }
+}

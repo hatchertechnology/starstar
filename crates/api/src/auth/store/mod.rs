@@ -344,4 +344,31 @@ mod tests {
         s.prune().unwrap();
         assert!(s.client(&used.id).unwrap().is_some());
     }
+
+    #[test]
+    fn prune_keeps_clients_with_live_codes_until_expiry() {
+        let s = AuthStore::open_in_memory(Clock::manual(1_000)).unwrap();
+        let u = s.create_user("a", "h", Role::Admin).unwrap();
+        let with_code = s
+            .register_client("with-code", &["http://127.0.0.1/cb".into()])
+            .unwrap();
+        s.clock().advance(2 * 86400);
+        s.create_code(&codes::CodeParams {
+            client_id: &with_code.id,
+            user_id: u.id,
+            role: Role::Viewer,
+            redirect_uri: "http://127.0.0.1/cb",
+            code_challenge: "challenge",
+            resource: None,
+        })
+        .unwrap();
+        // Client is older than 24h, but has a live authorization code.
+        assert_eq!(s.prune().unwrap(), 0);
+        assert!(s.client(&with_code.id).unwrap().is_some());
+
+        // Once the code expires, prune removes both the expired code and the client.
+        s.clock().advance(codes::CODE_TTL + 1);
+        assert_eq!(s.prune().unwrap(), 2);
+        assert!(s.client(&with_code.id).unwrap().is_none());
+    }
 }

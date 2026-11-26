@@ -1088,6 +1088,49 @@ async fn concurrent_exchanges_of_one_code_yield_exactly_one_success() {
     assert_eq!(ok, 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_code_exchange_replay_revokes_the_grant() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let (v, c) = pkce();
+    let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let spawn_exchange = || {
+        let (app, code, v, barrier) = (app.clone(), code.clone(), v.clone(), barrier.clone());
+        tokio::spawn(async move {
+            barrier.wait().await;
+            token(
+                &app,
+                &[
+                    ("grant_type", "authorization_code"),
+                    ("code", &code),
+                    ("redirect_uri", CB),
+                    ("client_id", "starstar-cli"),
+                    ("code_verifier", &v),
+                ],
+            )
+            .await
+        })
+    };
+    let (a, b2) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(spawn_exchange(), spawn_exchange())
+    })
+    .await
+    .expect("exchange hung");
+    let (a, b2) = (a.unwrap(), b2.unwrap());
+    let mut responses = [a, b2];
+    responses.sort_by_key(|r| r.status.as_u16());
+    assert_eq!(
+        [responses[0].status.as_u16(), responses[1].status.as_u16()],
+        [200, 400]
+    );
+    assert_eq!(responses[1].json()["error"], "invalid_grant");
+    let (at, _) = pair(&responses[0]);
+    assert_eq!(bearer_me(&app, &at).await.status, 401);
+    assert!(state.auth.list_grants(None).unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn refresh_rotates_tokens() {
     let (app, _, _, at1, rt1) = cli_pair().await;
@@ -1121,6 +1164,40 @@ async fn concurrent_refreshes_both_succeed() {
     assert_eq!(refresh(&app, &rt_a).await.status, 200);
     assert_eq!(refresh(&app, &rt_b).await.status, 200);
     assert_eq!(state.auth.list_grants(None).unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_concurrent_refreshes_trigger_reuse_and_revoke_grant() {
+    let (app, state, _, _, rt) = cli_pair().await;
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+    let spawn_refresh = || {
+        let (app, rt, barrier) = (app.clone(), rt.clone(), barrier.clone());
+        tokio::spawn(async move {
+            barrier.wait().await;
+            refresh(&app, &rt).await
+        })
+    };
+    let (r1, r2, r3) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(spawn_refresh(), spawn_refresh(), spawn_refresh())
+    })
+    .await
+    .expect("three concurrent refreshes hung");
+    let mut responses = [r1.unwrap(), r2.unwrap(), r3.unwrap()];
+    responses.sort_by_key(|r| r.status.as_u16());
+    assert_eq!(
+        [
+            responses[0].status.as_u16(),
+            responses[1].status.as_u16(),
+            responses[2].status.as_u16(),
+        ],
+        [200, 200, 400]
+    );
+    assert_eq!(responses[2].json()["error"], "invalid_grant");
+    for ok_resp in &responses[..2] {
+        let (at, _) = pair(ok_resp);
+        assert_eq!(bearer_me(&app, &at).await.status, 401);
+    }
+    assert!(state.auth.list_grants(None).unwrap().is_empty());
 }
 
 #[tokio::test]

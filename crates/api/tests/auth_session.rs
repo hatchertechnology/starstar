@@ -435,3 +435,34 @@ async fn successful_logins_do_not_use_up_the_per_ip_budget() {
         assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
     }
 }
+
+#[tokio::test]
+async fn logout_only_deletes_current_session_and_user_delete_cascades_sessions() {
+    let (app, state) = test_app();
+    let admin = token_for(&state, "boss", Role::Admin);
+    create_user(&state, "v", "pw-v-123456", Role::Viewer);
+    let b1 = login(&app, "v", "pw-v-123456").await;
+    let b2 = login(&app, "v", "pw-v-123456").await;
+
+    let logout_b1 = send(
+        &app,
+        b1.apply(Request::delete("/api/session"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(logout_b1.status, 204);
+    assert_eq!(send(&app, get(b1, "/api/me")).await.status, 401);
+    assert_eq!(send(&app, get(b2.copy(), "/api/me")).await.status, 200);
+
+    let del = send(
+        &app,
+        Request::delete("/api/users/v")
+            .header("authorization", format!("Bearer {admin}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(del.status, 204);
+    assert_eq!(send(&app, get(b2, "/api/me")).await.status, 401);
+}

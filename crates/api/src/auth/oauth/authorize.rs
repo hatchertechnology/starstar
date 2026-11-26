@@ -3,7 +3,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, LOCATION, REFERRER_POLICY,
+    ACCEPT, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, LOCATION, REFERRER_POLICY,
     X_FRAME_OPTIONS,
 };
 use axum::http::request::Parts;
@@ -227,12 +227,57 @@ struct Decision {
     allow_admin: Option<String>,
 }
 
+/// Why a decision failed, so a browser form can be sent back to the consent
+/// page with a matching message.
+enum Failure {
+    NoSession,
+    Csrf,
+    Expired,
+    Role,
+    Other,
+}
+
+type DecisionResult = Result<Response, (ApiError, Failure)>;
+
+fn wants_html(parts: &Parts) -> bool {
+    parts
+        .headers
+        .get_all(ACCEPT)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.to_ascii_lowercase().contains("text/html"))
+}
+
 async fn decision(
     State(state): State<AppState>,
     parts: Parts,
     Form(form): Form<Decision>,
 ) -> Result<Response, ApiError> {
-    let session = session_from_parts(&parts, &state)?;
+    match decide(&state, &parts, &form) {
+        Ok(response) => Ok(response),
+        Err((error, failure)) if wants_html(&parts) => {
+            let id: String =
+                url::form_urlencoded::byte_serialize(form.request.as_bytes()).collect();
+            let consent = format!("/consent?request={id}");
+            let error_kind = match failure {
+                Failure::NoSession => {
+                    let next: String =
+                        url::form_urlencoded::byte_serialize(consent.as_bytes()).collect();
+                    return Ok(see_other(&format!("/login?next={next}")));
+                }
+                Failure::Csrf => "csrf",
+                Failure::Expired => "expired",
+                Failure::Role => "role",
+                Failure::Other => return Err(error),
+            };
+            Ok(see_other(&format!("{consent}&error={error_kind}")))
+        }
+        Err((error, _)) => Err(error),
+    }
+}
+
+fn decide(state: &AppState, parts: &Parts, form: &Decision) -> DecisionResult {
+    let session = session_from_parts(parts, state).map_err(|e| (e, Failure::NoSession))?;
     let supplied = parts
         .headers
         .get(CSRF_HEADER)
@@ -240,50 +285,72 @@ async fn decision(
         .or(form.csrf_token.as_deref())
         .unwrap_or("");
     if !ct_eq(supplied.as_bytes(), session.csrf_token.as_bytes()) {
-        return Err(ApiError::Forbidden(
-            "missing or invalid CSRF token".to_owned(),
+        return Err((
+            ApiError::Forbidden("missing or invalid CSRF token".to_owned()),
+            Failure::Csrf,
         ));
     }
-    let pending = state
-        .auth
-        .take_pending(&form.request)
-        .ok_or_else(|| ApiError::NotFound("no such authorization request".to_owned()))?;
-    let oauth = |e: OAuthError| ApiError::Internal(e.description);
-
-    match form.decision.as_str() {
-        "deny" => redirect_with(
-            &pending.redirect_uri,
-            pending.state.as_deref(),
-            &[("error", "access_denied")],
+    let gone = || {
+        (
+            ApiError::NotFound("no such authorization request".to_owned()),
+            Failure::Expired,
         )
-        .map_err(oauth),
+    };
+    let bad_role = |m: String| (ApiError::BadRequest(m), Failure::Role);
+    let oauth = |e: OAuthError| (ApiError::Internal(e.description), Failure::Other);
+
+    // Validate everything the user controls before consuming the request, so
+    // a rejected role does not force them to restart the flow.
+    let peeked = state.auth.pending(&form.request).ok_or_else(gone)?;
+    let allow = match form.decision.as_str() {
+        "deny" => None,
         "allow" => {
             let role: Role = form
                 .role
                 .as_deref()
-                .ok_or_else(|| ApiError::BadRequest("role is required".to_owned()))?
+                .ok_or_else(|| bad_role("role is required".to_owned()))?
                 .parse()
-                .map_err(|e: starstar_shared::UnknownRole| ApiError::BadRequest(e.to_string()))?;
-            let ceiling = pending.requested_role.min(session.caller.role);
+                .map_err(|e: starstar_shared::UnknownRole| bad_role(e.to_string()))?;
+            let ceiling = peeked.requested_role.min(session.caller.role);
             if role > ceiling {
-                return Err(ApiError::BadRequest(format!(
+                return Err(bad_role(format!(
                     "the {role} role is above what this request and your account allow ({ceiling})"
                 )));
             }
             let allow_admin = matches!(form.allow_admin.as_deref(), Some("true" | "on" | "1"));
             if role == Role::Admin && !allow_admin {
-                return Err(ApiError::BadRequest(
-                    "granting admin needs allow_admin=true".to_owned(),
-                ));
+                return Err(bad_role("granting admin needs allow_admin=true".to_owned()));
             }
-            let code = state.auth.create_code(&CodeParams {
-                client_id: &pending.client_id,
-                user_id: session.user_id,
-                role,
-                redirect_uri: &pending.redirect_uri,
-                code_challenge: &pending.code_challenge,
-                resource: pending.resource.as_deref(),
-            })?;
+            Some(role)
+        }
+        _ => {
+            return Err((
+                ApiError::BadRequest("decision must be allow or deny".to_owned()),
+                Failure::Other,
+            ));
+        }
+    };
+
+    let pending = state.auth.take_pending(&form.request).ok_or_else(gone)?;
+    match allow {
+        None => redirect_with(
+            &pending.redirect_uri,
+            pending.state.as_deref(),
+            &[("error", "access_denied")],
+        )
+        .map_err(oauth),
+        Some(role) => {
+            let code = state
+                .auth
+                .create_code(&CodeParams {
+                    client_id: &pending.client_id,
+                    user_id: session.user_id,
+                    role,
+                    redirect_uri: &pending.redirect_uri,
+                    code_challenge: &pending.code_challenge,
+                    resource: pending.resource.as_deref(),
+                })
+                .map_err(|e| (ApiError::from(e), Failure::Other))?;
             redirect_with(
                 &pending.redirect_uri,
                 pending.state.as_deref(),
@@ -291,9 +358,6 @@ async fn decision(
             )
             .map_err(oauth)
         }
-        _ => Err(ApiError::BadRequest(
-            "decision must be allow or deny".to_owned(),
-        )),
     }
 }
 

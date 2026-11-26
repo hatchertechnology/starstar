@@ -333,6 +333,155 @@ async fn authorize_rejects_redirect_onto_own_origin() {
     assert_eq!(r.status, 303);
 }
 
+/// A decision POST with the browser's cookie and CSRF header, optionally
+/// asking for HTML.
+async fn decide(app: &Router, b: &Browser, html: bool, form: &[(&str, &str)]) -> TestResponse {
+    let body = form
+        .iter()
+        .map(|(k, v)| format!("{}={}", urlencode(k), urlencode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let mut req = b
+        .apply(Request::post("/oauth/authorize/decision"))
+        .header("content-type", "application/x-www-form-urlencoded");
+    if html {
+        req = req.header("accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8");
+    }
+    send(app, req.body(Body::from(body)).unwrap()).await
+}
+
+#[tokio::test]
+async fn a_rejected_role_does_not_burn_the_request() {
+    let (app, state) = test_app();
+    create_user(&state, "op", "pw-op-123456", Role::Operator);
+    let b = login(&app, "op", "pw-op-123456").await;
+    let (_, ch) = pkce();
+    let id = request_id(
+        &get_as(
+            &app,
+            &b,
+            &authorize_uri("starstar-cli", CB, &ch, "&scope=starstar:viewer"),
+        )
+        .await,
+    );
+    for bad in [
+        vec![
+            ("request", id.as_str()),
+            ("decision", "allow"),
+            ("role", "operator"),
+        ],
+        vec![
+            ("request", id.as_str()),
+            ("decision", "allow"),
+            ("role", "root"),
+        ],
+        vec![("request", id.as_str()), ("decision", "allow")],
+    ] {
+        assert_eq!(decide(&app, &b, false, &bad).await.status, 400);
+    }
+    let r = decide(
+        &app,
+        &b,
+        false,
+        &[("request", &id), ("decision", "allow"), ("role", "viewer")],
+    )
+    .await;
+    assert_eq!(r.status, 303, "{}", r.body);
+    assert!(location(&r).contains("code="));
+}
+
+#[tokio::test]
+async fn html_decision_errors_redirect_back_to_the_consent_page() {
+    let (app, state) = test_app();
+    create_user(&state, "op", "pw-op-123456", Role::Operator);
+    let b = login(&app, "op", "pw-op-123456").await;
+    let (_, ch) = pkce();
+    let id = request_id(
+        &get_as(
+            &app,
+            &b,
+            &authorize_uri("starstar-cli", CB, &ch, "&scope=starstar:viewer"),
+        )
+        .await,
+    );
+    let back = |error: &str| format!("/consent?request={id}&error={error}");
+
+    // Role above the request's ceiling.
+    let r = decide(
+        &app,
+        &b,
+        true,
+        &[
+            ("request", &id),
+            ("decision", "allow"),
+            ("role", "operator"),
+        ],
+    )
+    .await;
+    assert_eq!((r.status.as_u16(), location(&r)), (303, back("role")));
+    // Missing role.
+    let r = decide(&app, &b, true, &[("request", &id), ("decision", "allow")]).await;
+    assert_eq!((r.status.as_u16(), location(&r)), (303, back("role")));
+
+    // Bad CSRF token.
+    let body = format!("request={id}&decision=deny&csrf_token=nope");
+    let req = b
+        .cookie_only(Request::post("/oauth/authorize/decision"))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "text/html")
+        .header("x-csrf-token", "wrong")
+        .body(Body::from(body))
+        .unwrap();
+    let r = send(&app, req).await;
+    assert_eq!((r.status.as_u16(), location(&r)), (303, back("csrf")));
+
+    // Expired request.
+    state.auth.clock().advance(601);
+    state.auth.prune().unwrap();
+    let r = decide(&app, &b, true, &[("request", &id), ("decision", "deny")]).await;
+    assert_eq!((r.status.as_u16(), location(&r)), (303, back("expired")));
+
+    // No session: back to sign-in, which returns to the consent page.
+    let req = Request::post("/oauth/authorize/decision")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "text/html")
+        .body(Body::from(format!("request={id}&decision=deny")))
+        .unwrap();
+    let r = send(&app, req).await;
+    assert_eq!(r.status, 303);
+    assert_eq!(
+        location(&r),
+        format!(
+            "/login?next={}",
+            urlencode(&format!("/consent?request={id}"))
+        )
+    );
+}
+
+#[tokio::test]
+async fn json_clients_still_get_json_decision_errors() {
+    let (app, state) = test_app();
+    create_user(&state, "op", "pw-op-123456", Role::Operator);
+    let b = login(&app, "op", "pw-op-123456").await;
+    let r = decide(
+        &app,
+        &b,
+        false,
+        &[("request", "ss_rq_gone"), ("decision", "deny")],
+    )
+    .await;
+    assert_eq!(r.status, 404);
+    assert!(r.json().get("error").is_some());
+    let r = decide(
+        &app,
+        &b,
+        true,
+        &[("request", "ss_rq_gone"), ("decision", "deny")],
+    )
+    .await;
+    assert_eq!(r.status, 303);
+}
+
 #[tokio::test]
 async fn authorize_is_limited_per_ip() {
     let (app, state) = test_app();

@@ -87,6 +87,56 @@ pub fn printer_storage(name: &str) -> Endpoint {
     printer_at(Method::GET, name, &["storage"])
 }
 
+/// What to do to the running job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum JobAction {
+    Pause,
+    Resume,
+    Continue,
+}
+
+impl JobAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Continue => "continue",
+        }
+    }
+
+    pub fn past_tense(self) -> &'static str {
+        match self {
+            Self::Pause => "paused",
+            Self::Resume => "resumed",
+            Self::Continue => "continued",
+        }
+    }
+}
+
+pub fn job(printer: &str) -> Endpoint {
+    printer_at(Method::GET, printer, &["job"])
+}
+
+pub fn stop_job(printer: &str, id: u64) -> Endpoint {
+    printer_at(Method::DELETE, printer, &["job", &id.to_string()])
+}
+
+pub fn job_action(printer: &str, id: u64, action: JobAction) -> Endpoint {
+    printer_at(
+        Method::PUT,
+        printer,
+        &["job", &id.to_string(), action.as_str()],
+    )
+}
+
+pub fn transfer(printer: &str) -> Endpoint {
+    printer_at(Method::GET, printer, &["transfer"])
+}
+
+pub fn cancel_transfer(printer: &str, id: u64) -> Endpoint {
+    printer_at(Method::DELETE, printer, &["transfer", &id.to_string()])
+}
+
 /// A place on a printer's storage: `<storage>[/<path…>]`. Segments are kept
 /// apart so each one is encoded on its own and never interpreted as a path.
 #[derive(Debug, Clone, PartialEq, Eq)]

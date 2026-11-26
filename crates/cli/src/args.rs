@@ -52,6 +52,12 @@ pub enum Command {
         #[arg(long)]
         password_stdin: bool,
     },
+    /// Show and control the running print job.
+    #[command(subcommand)]
+    Job(JobCommand),
+    /// Show and cancel a file transfer to the printer.
+    #[command(subcommand)]
+    Transfer(TransferCommand),
     /// List and inspect printers.
     #[command(subcommand)]
     Printer(PrinterCommand),
@@ -108,4 +114,64 @@ pub struct AddArgs {
     /// Read the password from stdin instead of prompting for it.
     #[arg(long)]
     pub password_stdin: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum JobCommand {
+    /// Show the current job, if any.
+    Show {
+        /// Printer name.
+        printer: String,
+    },
+    /// Pause the current job.
+    Pause {
+        /// Printer name.
+        printer: String,
+        /// Job id. Without it, the current job is looked up first.
+        #[arg(long)]
+        id: Option<u64>,
+    },
+    /// Resume a paused job.
+    Resume {
+        /// Printer name.
+        printer: String,
+        /// Job id. Without it, the current job is looked up first.
+        #[arg(long)]
+        id: Option<u64>,
+    },
+    /// Continue a job that is waiting for the user (for example after a filament change).
+    Continue {
+        /// Printer name.
+        printer: String,
+        /// Job id. Without it, the current job is looked up first.
+        #[arg(long)]
+        id: Option<u64>,
+    },
+    /// Stop (cancel) the current job. Needs --yes without a terminal.
+    Stop {
+        /// Printer name.
+        printer: String,
+        /// Job id. Without it, the current job is looked up first.
+        #[arg(long)]
+        id: Option<u64>,
+        #[command(flatten)]
+        confirm: ConfirmArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TransferCommand {
+    /// Show the file transfer in progress, if any.
+    Show {
+        /// Printer name.
+        printer: String,
+    },
+    /// Cancel the file transfer in progress.
+    Cancel {
+        /// Printer name.
+        printer: String,
+        /// Transfer id. Without it, the current transfer is looked up first.
+        #[arg(long)]
+        id: Option<u64>,
+    },
 }

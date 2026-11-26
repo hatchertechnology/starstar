@@ -19,7 +19,8 @@ use starstar_cli::credentials::{CredentialStore, StoredToken, server_key};
 use starstar_cli::oauth::Pkce;
 use starstar_shared::auth::{TokenResponse, WhoAmI};
 use starstar_shared::{
-    Health, PrinterInfo, PrinterKind, PrinterStatus, PrinterSummary, Role, StorageDevice,
+    Health, Job, JobFile, PrinterInfo, PrinterKind, PrinterStatus, PrinterSummary, Role,
+    StorageDevice, Transfer,
 };
 
 pub const TOKEN: &str = "ss_at_test";
@@ -466,6 +467,30 @@ fn defaults(method: &str, path: &str) -> Canned {
             },
         ),
         ("GET", "/api/printers") => Canned::json(200, vec![mk4_summary()]),
+        ("GET", "/api/printers/mk4/job") => Canned::json(
+            200,
+            Job {
+                id: 42,
+                state: "PRINTING".into(),
+                progress: 37.5,
+                time_remaining: Some(1800),
+                time_printing: 1200,
+                inaccurate_estimates: None,
+                serial_print: false,
+                file: Some(JobFile {
+                    name: "CUBE~1.BGC".into(),
+                    display_name: Some("cube-12mm.bgcode".into()),
+                    path: "/usb".into(),
+                    display_path: None,
+                    size: Some(123_456),
+                    modified: None,
+                    meta: None,
+                }),
+            },
+        ),
+        ("PUT" | "DELETE", p) if p.starts_with("/api/printers/mk4/job/") => Canned::empty(204),
+        ("GET", "/api/printers/mk4/transfer") => Canned::json(200, transfer(Some(7))),
+        ("DELETE", p) if p.starts_with("/api/printers/mk4/transfer/") => Canned::empty(204),
         ("POST", "/api/printers") => Canned::json(201, mk4_summary()),
         ("DELETE", "/api/printers/mk4") => Canned::empty(204),
         ("GET", "/api/printers/mk4") => Canned::json(200, mk4_summary()),
@@ -506,6 +531,22 @@ fn defaults(method: &str, path: &str) -> Canned {
             }],
         ),
         _ => Canned::json(404, json!({"error": "not found"})),
+    }
+}
+
+pub fn transfer(id: Option<u64>) -> Transfer {
+    Transfer {
+        id,
+        kind: "FROM_CLIENT".into(),
+        display_name: "big.bgcode".into(),
+        path: "/usb".into(),
+        url: None,
+        size: Some(2048),
+        progress: 0.5,
+        transferred: 1024,
+        time_remaining: None,
+        time_transferring: 12,
+        to_print: false,
     }
 }
 

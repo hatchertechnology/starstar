@@ -10,6 +10,7 @@ use crate::error::{CliError, CliResult};
 use crate::output::Output;
 
 pub mod account;
+pub mod jobs;
 pub mod printers;
 
 /// What every command needs. Clients are built on demand, so a command can
@@ -75,5 +76,7 @@ pub fn dispatch(cli: Cli, out: Output) -> CliResult<()> {
             password_stdin,
         } => account::setup(&ctx, username, setup_code_stdin, password_stdin),
         Command::Printer(c) => printers::run(&ctx, c),
+        Command::Job(c) => jobs::run_job(&ctx, c),
+        Command::Transfer(c) => jobs::run_transfer(&ctx, c),
     }
 }

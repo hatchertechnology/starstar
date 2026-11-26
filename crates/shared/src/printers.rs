@@ -129,3 +129,14 @@ pub struct DeleteOptions {
     #[serde(default)]
     pub force: bool,
 }
+
+/// Options for uploading a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UploadOptions {
+    /// Replace an existing file of the same name.
+    #[serde(default)]
+    pub overwrite: bool,
+    /// Start printing as soon as the upload finishes.
+    #[serde(default)]
+    pub print: bool,
+}

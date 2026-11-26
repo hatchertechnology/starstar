@@ -1,6 +1,6 @@
 //! Files and folders on a printer's storage.
 
-use starstar_shared::{DeleteOptions, FileEntry, FileState, Role};
+use starstar_shared::{DeleteOptions, FileEntry, FileState, Role, UploadOptions};
 
 use super::paths::{file_segments, resolve_storage};
 use super::{client, find};
@@ -12,6 +12,7 @@ pub const FILE_INFO_ROLE: Role = Role::Viewer;
 pub const FILE_STATE_ROLE: Role = Role::Viewer;
 pub const PRINT_FILE_ROLE: Role = Role::Operator;
 pub const DELETE_FILE_ROLE: Role = Role::Admin;
+pub const UPLOAD_FILE_ROLE: Role = Role::Operator;
 
 /// Metadata of a file or folder; `path: None` lists the storage root.
 pub async fn file_info(
@@ -79,4 +80,62 @@ pub async fn delete_file(
     let client = client(state, &printer);
     let storage = resolve_storage(&client, storage).await?;
     Ok(client.delete_file(&storage, &segments, opts.force).await?)
+}
+
+/// A file being uploaded: its exact length and a body that yields that many bytes.
+///
+/// HTTP handlers hand over the request body as a stream, so large files are
+/// never held in memory.
+pub struct UploadBody {
+    pub length: u64,
+    pub body: reqwest::Body,
+}
+
+impl UploadBody {
+    /// For callers that already hold the whole file (MCP enforces its own,
+    /// smaller `mcp_max_upload_bytes` first).
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self {
+            length: bytes.len() as u64,
+            body: reqwest::Body::from(bytes),
+        }
+    }
+}
+
+fn too_large_message(max: u64) -> String {
+    if max < 1024 * 1024 {
+        format!("upload is larger than the {max} bytes limit")
+    } else {
+        format!("upload is larger than the {} MB limit", max / (1024 * 1024))
+    }
+}
+
+pub async fn upload_file(
+    state: &AppState,
+    caller: &Caller,
+    printer: &str,
+    storage: &str,
+    path: &str,
+    upload: UploadBody,
+    opts: UploadOptions,
+) -> Result<(), ApiError> {
+    caller.require(UPLOAD_FILE_ROLE)?;
+    let max = state.config.max_upload_bytes;
+    if upload.length > max {
+        return Err(ApiError::PayloadTooLarge(too_large_message(max)));
+    }
+    let printer = find(state, printer)?;
+    let segments = file_segments(path)?;
+    let client = client(state, &printer);
+    let storage = resolve_storage(&client, storage).await?;
+    Ok(client
+        .upload(
+            &storage,
+            &segments,
+            upload.length,
+            upload.body,
+            opts.overwrite,
+            opts.print,
+        )
+        .await?)
 }

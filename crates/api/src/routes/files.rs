@@ -1,16 +1,17 @@
 //! File routes. Paths after the storage name are captured whole by `{*path}`.
 
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use starstar_shared::{DeleteOptions, FileEntry};
+use starstar_shared::{DeleteOptions, FileEntry, UploadOptions};
 
 use crate::AppState;
 use crate::auth::{Admin, Operator, Viewer};
 use crate::error::ApiError;
-use crate::printers::files;
+use crate::printers::files::{self, UploadBody};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -21,7 +22,8 @@ pub fn router() -> Router<AppState> {
             get(file_info)
                 .head(file_head)
                 .post(file_action)
-                .delete(delete_file),
+                .delete(delete_file)
+                .put(upload_file),
         )
 }
 
@@ -84,4 +86,29 @@ async fn delete_file(
 ) -> Result<StatusCode, ApiError> {
     files::delete_file(&state, &caller, &name, &storage, &path, opts).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PUT`: streams the request body to the printer. The body is never collected
+/// or buffered here, so uploads can exceed axum's default body limit.
+async fn upload_file(
+    Operator(caller): Operator,
+    State(state): State<AppState>,
+    Path((name, storage, path)): Path<(String, String, String)>,
+    Query(opts): Query<UploadOptions>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<StatusCode, ApiError> {
+    let length = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .ok_or_else(|| {
+            ApiError::LengthRequired("uploads need a Content-Length header".to_owned())
+        })?;
+    let upload = UploadBody {
+        length,
+        body: reqwest::Body::wrap_stream(body.into_data_stream()),
+    };
+    files::upload_file(&state, &caller, &name, &storage, &path, upload, opts).await?;
+    Ok(StatusCode::CREATED)
 }

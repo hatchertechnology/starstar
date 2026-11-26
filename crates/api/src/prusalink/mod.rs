@@ -11,6 +11,7 @@ use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+mod digest;
 pub mod wire;
 
 pub use wire::*;
@@ -295,6 +296,58 @@ impl PrusaLinkClient {
             HeaderValue::from_static(if force { "?1" } else { "?0" }),
         );
         self.send(Method::DELETE, url, headers, None).await?;
+        Ok(())
+    }
+
+    /// Uploads a file with `PUT`, streaming `body` (exactly `length` bytes).
+    ///
+    /// A stream cannot be replayed after a digest challenge, so a bodyless
+    /// `HEAD` first collects the challenge; the `PUT` is then signed by hand
+    /// and sent once.
+    pub async fn upload(
+        &self,
+        storage: &str,
+        segments: &[String],
+        length: u64,
+        body: reqwest::Body,
+        overwrite: bool,
+        print_after: bool,
+    ) -> Result<(), PrusaError> {
+        let url = self.endpoint(&Self::file_segments(storage, segments))?;
+        // The encoded path plus query, exactly as it goes on the request line.
+        let uri = match url.query() {
+            Some(query) => format!("{}?{query}", url.path()),
+            None => url.path().to_owned(),
+        };
+
+        let probe = self
+            .http
+            .head(url.clone())
+            .timeout(self.upload_timeout)
+            .send()
+            .await
+            .map_err(map_reqwest)?;
+        let challenge = (probe.status() == StatusCode::UNAUTHORIZED)
+            .then(|| probe.headers().get(reqwest::header::WWW_AUTHENTICATE))
+            .flatten()
+            .and_then(|v| v.to_str().ok());
+
+        let mut request = self
+            .http
+            .put(url)
+            .timeout(self.upload_timeout)
+            .header(reqwest::header::CONTENT_LENGTH, length)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .header("Overwrite", if overwrite { "?1" } else { "?0" })
+            .header("Print-After-Upload", if print_after { "?1" } else { "?0" })
+            .body(body);
+        if let Some(challenge) = challenge {
+            let authorization =
+                digest::authorization(challenge, &self.username, &self.password, "PUT", &uri)?;
+            request = request.header(reqwest::header::AUTHORIZATION, authorization);
+        }
+        let response = request.send().await.map_err(map_reqwest)?;
+        self.check(response).await?;
         Ok(())
     }
 

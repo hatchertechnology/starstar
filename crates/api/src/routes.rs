@@ -9,6 +9,7 @@ use starstar_shared::{
 
 use crate::AppState;
 use crate::error::ApiError;
+use crate::printers::{self, find};
 use crate::store::StoredPrinter;
 
 pub fn router(state: AppState) -> Router {
@@ -57,8 +58,7 @@ async fn register_printer(
     };
 
     // Confirm the printer is reachable and the credentials work before saving.
-    printer
-        .client(state.http.clone())
+    printers::client(&state, &printer)
         .version()
         .await
         .map_err(|err| ApiError::Upstream(format!("could not verify printer: {err}")))?;
@@ -90,7 +90,7 @@ async fn printer_info(
     Path(name): Path<String>,
 ) -> Result<Json<PrinterInfo>, ApiError> {
     let printer = find(&state, &name)?;
-    let client = printer.client(state.http.clone());
+    let client = printers::client(&state, &printer);
     let (version, info) = tokio::try_join!(client.version(), client.info())?;
 
     Ok(Json(PrinterInfo {
@@ -110,7 +110,7 @@ async fn printer_status(
     Path(name): Path<String>,
 ) -> Result<Json<PrinterStatus>, ApiError> {
     let printer = find(&state, &name)?;
-    let status = printer.client(state.http.clone()).status().await?.printer;
+    let status = printers::client(&state, &printer).status().await?.printer;
 
     Ok(Json(PrinterStatus {
         name: printer.name,
@@ -127,7 +127,7 @@ async fn printer_storage(
     Path(name): Path<String>,
 ) -> Result<Json<Vec<StorageDevice>>, ApiError> {
     let printer = find(&state, &name)?;
-    let list = printer.client(state.http.clone()).storage().await?;
+    let list = printers::client(&state, &printer).storage().await?;
 
     Ok(Json(
         list.storage_list
@@ -143,10 +143,6 @@ async fn printer_storage(
             })
             .collect(),
     ))
-}
-
-fn find(state: &AppState, name: &str) -> Result<StoredPrinter, ApiError> {
-    state.store.get(name)?.ok_or_else(|| not_found(name))
 }
 
 fn not_found(name: &str) -> ApiError {

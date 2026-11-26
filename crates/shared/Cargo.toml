@@ -1,0 +1,10 @@
+[package]
+name = "starstar-shared"
+description = "Types and helpers shared by the starstar CLI and API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

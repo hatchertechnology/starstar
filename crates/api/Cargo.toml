@@ -1,0 +1,11 @@
+[package]
+name = "starstar-api"
+description = "HTTP API for the starstar 3D printer management system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+starstar-shared.workspace = true

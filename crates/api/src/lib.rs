@@ -23,7 +23,7 @@ pub struct AppState {
     pub store: Arc<PrinterStore>,
     pub http: reqwest::Client,
     pub config: Arc<Config>,
-    // auth part adds: pub auth: Arc<auth::AuthStore>,
+    pub auth: Arc<auth::AuthStore>,
 }
 
 /// Builds the API router for the given state.

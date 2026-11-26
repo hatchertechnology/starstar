@@ -19,6 +19,10 @@ pub mod crypto;
 pub mod password;
 pub mod ratelimit;
 pub mod startup;
+pub mod store;
+
+pub use store::AuthStore;
+use store::AuthStoreError;
 
 use axum::Router;
 use axum::extract::FromRequestParts;
@@ -93,4 +97,16 @@ role_extractor!(Admin, Role::Admin, "Requires the admin role.");
 /// Auth-owned routes. SCAFFOLD: empty.
 pub fn router(state: AppState) -> Router {
     Router::new().with_state(state)
+}
+
+impl From<AuthStoreError> for ApiError {
+    fn from(err: AuthStoreError) -> Self {
+        match err {
+            AuthStoreError::UsernameTaken(_)
+            | AuthStoreError::LastAdmin
+            | AuthStoreError::SetupClosed => Self::Conflict(err.to_string()),
+            AuthStoreError::UserNotFound(_) => Self::NotFound(err.to_string()),
+            _ => Self::Internal("internal error".to_owned()),
+        }
+    }
 }

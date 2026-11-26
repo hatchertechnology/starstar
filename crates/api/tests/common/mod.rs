@@ -12,16 +12,25 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::http::request::Builder;
+use starstar_api::auth::AuthStore;
+use starstar_api::auth::clock::Clock;
+use starstar_api::auth::password::Hasher;
 use starstar_api::config::Config;
 use starstar_api::prusalink::http_client;
-use starstar_api::store::PrinterStore;
+use starstar_api::store::{Db, PrinterStore};
 use starstar_api::{AppState, router};
 use starstar_shared::Role;
 
 /// A fresh in-memory state with default config.
+pub const TEST_START: i64 = 1_800_000_000;
+
 pub fn test_state() -> AppState {
+    let db = Db::open_in_memory().unwrap();
     AppState {
-        store: Arc::new(PrinterStore::open_in_memory().unwrap()),
+        store: Arc::new(PrinterStore::from_db(db.clone())),
+        auth: Arc::new(
+            AuthStore::new(db, Clock::manual(TEST_START), Hasher::fast_for_tests()).unwrap(),
+        ),
         http: http_client().unwrap(),
         config: Arc::new(Config::default()),
     }

@@ -5,6 +5,7 @@
 //! than read from the environment elsewhere.
 
 use std::env;
+use std::net::IpAddr;
 
 use ipnet::IpNet;
 
@@ -33,6 +34,26 @@ pub struct Config {
     /// `STARSTAR_TRUSTED_PROXIES`: comma-separated CIDRs whose
     /// `X-Forwarded-For` header is believed. Default empty.
     pub trusted_proxies: Vec<IpNet>,
+    /// Entries of `STARSTAR_TRUSTED_PROXIES` that are neither an IP address
+    /// nor a CIDR. `check_config` refuses to start while this is non-empty.
+    pub invalid_trusted_proxies: Vec<String>,
+}
+
+/// Splits a `STARSTAR_TRUSTED_PROXIES` value into valid networks and invalid
+/// entries. A bare IP address is a /32 or /128.
+pub fn parse_trusted_proxies(value: &str) -> (Vec<IpNet>, Vec<String>) {
+    let mut nets = Vec::new();
+    let mut invalid = Vec::new();
+    for entry in value.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        match entry
+            .parse::<IpNet>()
+            .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+        {
+            Ok(net) => nets.push(net),
+            Err(_) => invalid.push(entry.to_owned()),
+        }
+    }
+    (nets, invalid)
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -49,6 +70,9 @@ impl Config {
                 * MIB
         };
         let defaults = Self::default();
+        let (trusted_proxies, invalid_trusted_proxies) = var("STARSTAR_TRUSTED_PROXIES")
+            .map(|v| parse_trusted_proxies(&v))
+            .unwrap_or_default();
         Self {
             database: var("STARSTAR_DATABASE").unwrap_or(defaults.database),
             bind: var("STARSTAR_BIND").unwrap_or(defaults.bind),
@@ -60,13 +84,8 @@ impl Config {
             max_upload_bytes: mb("STARSTAR_MAX_UPLOAD_MB", 512),
             mcp_max_upload_bytes: mb("STARSTAR_MCP_MAX_UPLOAD_MB", 25),
             web_dir: var("STARSTAR_WEB_DIR").unwrap_or(defaults.web_dir),
-            trusted_proxies: var("STARSTAR_TRUSTED_PROXIES")
-                .map(|v| {
-                    v.split(',')
-                        .filter_map(|c| c.trim().parse::<IpNet>().ok())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            trusted_proxies,
+            invalid_trusted_proxies,
         }
     }
 }
@@ -83,6 +102,30 @@ impl Default for Config {
             mcp_max_upload_bytes: 25 * MIB,
             web_dir: "web/.output/public".to_owned(),
             trusted_proxies: Vec::new(),
+            invalid_trusted_proxies: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_ips_become_host_networks() {
+        let (nets, invalid) = parse_trusted_proxies("10.0.0.1, 192.168.0.0/16 ,::1,fd00::/8");
+        assert!(invalid.is_empty());
+        let shown: Vec<String> = nets.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            shown,
+            ["10.0.0.1/32", "192.168.0.0/16", "::1/128", "fd00::/8"]
+        );
+    }
+
+    #[test]
+    fn invalid_entries_are_reported_not_dropped() {
+        let (nets, invalid) = parse_trusted_proxies("10.0.0.1,nope,10.0.0.0/33,,172.16.0.0/12");
+        assert_eq!(nets.len(), 2);
+        assert_eq!(invalid, ["nope", "10.0.0.0/33"]);
     }
 }

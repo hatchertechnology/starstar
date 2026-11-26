@@ -17,6 +17,10 @@ pub enum StartupError {
         "refusing to listen on {0} over plain HTTP: set STARSTAR_PUBLIC_URL to an https:// URL served by a TLS proxy, or set STARSTAR_ALLOW_INSECURE_HTTP=1"
     )]
     InsecureHttp(String),
+    #[error(
+        "STARSTAR_TRUSTED_PROXIES entry `{0}` is neither an IP address nor a CIDR like 10.0.0.0/8"
+    )]
+    InvalidTrustedProxy(String),
     #[error("STARSTAR_SETUP_TOKEN must be at least 16 characters")]
     WeakSetupToken,
 }
@@ -31,6 +35,10 @@ pub fn check_config(config: &Config) -> Result<Option<String>, StartupError> {
         .bind
         .parse()
         .map_err(|_| StartupError::InvalidBind(config.bind.clone()))?;
+
+    if let Some(entry) = config.invalid_trusted_proxies.first() {
+        return Err(StartupError::InvalidTrustedProxy(entry.clone()));
+    }
 
     let url = Url::parse(&config.public_url).map_err(|_| bad_url("not a URL"))?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -132,6 +140,17 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn an_invalid_trusted_proxy_entry_fails_the_check() {
+        let c = Config {
+            invalid_trusted_proxies: vec!["10.0.0.0/33".into()],
+            ..Config::default()
+        };
+        let err = check_config(&c).unwrap_err();
+        assert!(matches!(err, StartupError::InvalidTrustedProxy(_)));
+        assert!(err.to_string().contains("10.0.0.0/33"));
     }
 
     #[test]

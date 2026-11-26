@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use starstar_api::auth::AuthStore;
 use starstar_api::auth::clock::Clock;
+use starstar_api::auth::crypto::new_setup_code;
 use starstar_api::auth::password::Hasher;
 use starstar_api::auth::startup::check_config;
 use starstar_api::config::Config;
@@ -31,6 +32,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         http: http_client()?,
         config: Arc::new(config.clone()),
     };
+
+    if state.auth.user_count()? == 0 {
+        match &config.setup_token {
+            Some(token) => {
+                state.auth.set_setup_code(Some(token.clone()));
+                println!(
+                    "no users yet: create the first admin with the setup code from STARSTAR_SETUP_TOKEN"
+                );
+            }
+            None => {
+                let code = new_setup_code();
+                state.auth.set_setup_code(Some(code.clone()));
+                println!(
+                    "no users yet: create the first admin at {}/setup with setup code {code}",
+                    config.public_url
+                );
+            }
+        }
+    }
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     println!(

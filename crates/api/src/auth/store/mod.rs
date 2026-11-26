@@ -51,6 +51,7 @@ pub struct AuthStore {
     pub(crate) hasher: Hasher,
     setup_code: Mutex<Option<String>>,
     login_limiter: RateLimiter,
+    setup_limiter: RateLimiter,
 }
 
 impl AuthStore {
@@ -61,6 +62,7 @@ impl AuthStore {
             hasher,
             setup_code: Mutex::new(None),
             login_limiter: RateLimiter::new(5, 900),
+            setup_limiter: RateLimiter::new(5, 900),
         };
         store.seed_clients()?;
         Ok(store)
@@ -74,6 +76,11 @@ impl AuthStore {
     /// 5 failed sign-ins per (username, IP) per 900 s.
     pub fn login_limiter(&self) -> &RateLimiter {
         &self.login_limiter
+    }
+
+    /// 5 failed setup attempts per client IP per 900 s.
+    pub fn setup_limiter(&self) -> &RateLimiter {
+        &self.setup_limiter
     }
 
     pub fn clock(&self) -> &Clock {

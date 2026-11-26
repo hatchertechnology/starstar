@@ -20,6 +20,7 @@ pub mod crypto;
 pub mod password;
 pub mod ratelimit;
 pub mod session;
+pub mod setup;
 pub mod startup;
 pub mod store;
 pub mod users;
@@ -223,6 +224,7 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(session::routes())
+        .merge(setup::routes())
         .merge(users::routes())
         .with_state(state)
 }

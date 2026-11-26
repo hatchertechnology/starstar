@@ -6,6 +6,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+pub mod auth;
+
 use serde::{Deserialize, Serialize};
 
 /// Application name, used in banners and API responses.

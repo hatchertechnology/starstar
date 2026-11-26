@@ -104,7 +104,8 @@ async fn change_password(
         &client_ip(&parts, &state.config.trusted_proxies),
     );
     let now = auth.now();
-    if auth.login_limiter().is_blocked(&key, now) {
+    // Reserve the attempt before any await, so parallel guesses all count.
+    if !auth.login_limiter().try_begin(&key, now) {
         return Err(ApiError::TooManyRequests(
             "too many failed attempts, try again later".to_owned(),
         ));
@@ -116,7 +117,6 @@ async fn change_password(
         .await
         .map_err(|_| ApiError::Internal("internal error".to_owned()))?;
     if !ok {
-        auth.login_limiter().record_failure(&key, now);
         return Err(ApiError::Forbidden(
             "current password is incorrect".to_owned(),
         ));

@@ -212,3 +212,35 @@ async fn wrong_current_password_is_rate_limited() {
     }
     assert_eq!(attempt("pw-kerry-123").await.status, 429);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_wrong_current_passwords_are_limited_to_five_evaluations() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let token = token_for(&state, "kerry", Role::Operator);
+    let mut tasks = Vec::new();
+    for _ in 0..50 {
+        let app = app.clone();
+        let token = token.clone();
+        tasks.push(tokio::spawn(async move {
+            let req = Request::put("/api/me/password")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"current_password": "nope-nope", "new_password": "another-pass-1"})
+                        .to_string(),
+                ))
+                .unwrap();
+            send(&app, req).await.status.as_u16()
+        }));
+    }
+    let mut evaluated = 0;
+    for t in tasks {
+        match t.await.unwrap() {
+            403 => evaluated += 1,
+            429 => {}
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert!(evaluated <= 5, "{evaluated} guesses were evaluated");
+}

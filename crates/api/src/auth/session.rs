@@ -66,7 +66,8 @@ async fn login(
     );
     let now = state.auth.now();
     let limiter = state.auth.login_limiter();
-    if limiter.is_blocked(&key, now) {
+    // Reserve the attempt before any await, so parallel guesses all count.
+    if !limiter.try_begin(&key, now) {
         return Err(ApiError::TooManyRequests(
             "too many failed sign-in attempts, try again later".to_owned(),
         ));
@@ -91,7 +92,6 @@ async fn login(
         }
     };
     let Some(user) = user.filter(|_| ok) else {
-        limiter.record_failure(&key, now);
         return Err(bad_login());
     };
 

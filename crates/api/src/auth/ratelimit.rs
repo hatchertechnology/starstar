@@ -40,14 +40,30 @@ impl RateLimiter {
         entry.0 += 1;
     }
 
+    /// Atomically reserves one attempt: under a single lock, refuses when the
+    /// key is already at its limit, otherwise counts the attempt and allows it.
+    /// Call it *before* any `.await`, then [`RateLimiter::reset`] on success, so
+    /// parallel requests cannot all pass a check-then-record gap.
+    ///
+    /// The window is fixed, so up to twice the limit can pass across a window
+    /// boundary.
+    pub fn try_begin(&self, key: &str, now: i64) -> bool {
+        let mut map = self.map();
+        let entry = map.entry(key.to_owned()).or_insert((0, now));
+        if now - entry.1 >= self.window_secs {
+            *entry = (0, now);
+        }
+        if entry.0 >= self.max_failures {
+            return false;
+        }
+        entry.0 += 1;
+        true
+    }
+
     /// Counts a hit regardless of outcome and reports whether it is allowed.
     /// Used for limits that count every request (client registration).
     pub fn hit(&self, key: &str, now: i64) -> bool {
-        if self.is_blocked(key, now) {
-            return false;
-        }
-        self.record_failure(key, now);
-        true
+        self.try_begin(key, now)
     }
 
     pub fn reset(&self, key: &str) {
@@ -98,6 +114,23 @@ mod tests {
         l.record_failure("b", 800);
         l.prune(901);
         assert_eq!(l.count(), 1);
+    }
+
+    #[test]
+    fn try_begin_is_atomic_across_threads() {
+        let l = std::sync::Arc::new(RateLimiter::new(5, 900));
+        let allowed: usize = (0..16)
+            .map(|_| {
+                let l = l.clone();
+                std::thread::spawn(move || (0..10).filter(|_| l.try_begin("k", 0)).count())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .sum();
+        assert_eq!(allowed, 5);
+        l.reset("k");
+        assert!(l.try_begin("k", 1));
     }
 
     #[test]

@@ -210,3 +210,27 @@ async fn bearer_header_wins_over_cookie() {
         .unwrap();
     assert_eq!(send(&app, req).await.status, 401);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_bad_logins_are_limited_to_five_evaluations() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let mut tasks = Vec::new();
+    for _ in 0..50 {
+        let app = app.clone();
+        tasks.push(tokio::spawn(async move {
+            post_login(&app, "kerry", "wrong-password").await.status
+        }));
+    }
+    let mut unauthorized = 0;
+    let mut limited = 0;
+    for t in tasks {
+        match t.await.unwrap().as_u16() {
+            401 => unauthorized += 1,
+            429 => limited += 1,
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert!(unauthorized <= 5, "{unauthorized} guesses were evaluated");
+    assert_eq!(unauthorized + limited, 50);
+}

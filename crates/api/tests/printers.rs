@@ -327,3 +327,50 @@ async fn fake_rejects_digest_for_another_uri_or_method() {
         .unwrap();
     assert_eq!(other_method.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn rejects_hosts_with_url_parts() {
+    let (app, state) = common::test_app();
+    for host in [
+        "user@10.0.0.5",
+        "10.0.0.5?x",
+        "10.0.0.5#x",
+        "10.0.0.5 ",
+        "10.0.0.5:notaport",
+        "10.0.0.5\\x",
+        "fe80::1",
+        "[fe80::1",
+        "[fe80::1]x",
+        "[fe80::1]:99999",
+        "",
+    ] {
+        let (status, body) = send(
+            &app,
+            &state,
+            Role::Admin,
+            Method::POST,
+            "/api/printers",
+            Some(registration("mk4", host)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{host:?}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn accepts_bracketed_ipv6_hosts() {
+    // Validation passes, so the failure is the (unreachable) reachability check.
+    let (app, state) = common::test_app();
+    for host in ["[::1]:1", "[::1]"] {
+        let (status, body) = send(
+            &app,
+            &state,
+            Role::Admin,
+            Method::POST,
+            "/api/printers",
+            Some(registration("mk4", host)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{host}: {body}");
+    }
+}

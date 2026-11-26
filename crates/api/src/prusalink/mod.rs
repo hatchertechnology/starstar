@@ -202,6 +202,41 @@ impl PrusaLinkClient {
     pub async fn storage(&self) -> Result<StorageList, PrusaError> {
         self.get_json(&["api", "v1", "storage"]).await
     }
+
+    /// The running job, or `None` when the printer is idle.
+    pub async fn job(&self) -> Result<Option<WireJob>, PrusaError> {
+        self.get_optional_json(&["api", "v1", "job"]).await
+    }
+
+    pub async fn stop_job(&self, id: u64) -> Result<(), PrusaError> {
+        self.job_action(Method::DELETE, id, None).await
+    }
+
+    pub async fn pause_job(&self, id: u64) -> Result<(), PrusaError> {
+        self.job_action(Method::PUT, id, Some("pause")).await
+    }
+
+    pub async fn resume_job(&self, id: u64) -> Result<(), PrusaError> {
+        self.job_action(Method::PUT, id, Some("resume")).await
+    }
+
+    pub async fn continue_job(&self, id: u64) -> Result<(), PrusaError> {
+        self.job_action(Method::PUT, id, Some("continue")).await
+    }
+
+    async fn job_action(
+        &self,
+        method: Method,
+        id: u64,
+        action: Option<&str>,
+    ) -> Result<(), PrusaError> {
+        let id = id.to_string();
+        let mut segments = vec!["api", "v1", "job", id.as_str()];
+        segments.extend(action);
+        let url = self.endpoint(&segments)?;
+        self.send(method, url, HeaderMap::new(), None).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

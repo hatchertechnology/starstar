@@ -23,3 +23,7 @@ pub(crate) fn client(state: &AppState, printer: &StoredPrinter) -> PrusaLinkClie
         .client(state.http.clone())
         .with_timeouts(state.config.printer_timeout, state.config.upload_timeout)
 }
+
+pub mod jobs;
+pub mod registry;
+pub mod telemetry;

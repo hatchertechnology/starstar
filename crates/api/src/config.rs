@@ -6,6 +6,8 @@
 
 use std::env;
 
+use ipnet::IpNet;
+
 /// Settings for one API process. Not `Debug`: it holds the setup token.
 #[derive(Clone)]
 pub struct Config {
@@ -28,6 +30,9 @@ pub struct Config {
     pub mcp_max_upload_bytes: u64,
     /// `STARSTAR_WEB_DIR`, default `web/.output/public`.
     pub web_dir: String,
+    /// `STARSTAR_TRUSTED_PROXIES`: comma-separated CIDRs whose
+    /// `X-Forwarded-For` header is believed. Default empty.
+    pub trusted_proxies: Vec<IpNet>,
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -55,6 +60,13 @@ impl Config {
             max_upload_bytes: mb("STARSTAR_MAX_UPLOAD_MB", 512),
             mcp_max_upload_bytes: mb("STARSTAR_MCP_MAX_UPLOAD_MB", 25),
             web_dir: var("STARSTAR_WEB_DIR").unwrap_or(defaults.web_dir),
+            trusted_proxies: var("STARSTAR_TRUSTED_PROXIES")
+                .map(|v| {
+                    v.split(',')
+                        .filter_map(|c| c.trim().parse::<IpNet>().ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -70,6 +82,7 @@ impl Default for Config {
             max_upload_bytes: 512 * MIB,
             mcp_max_upload_bytes: 25 * MIB,
             web_dir: "web/.output/public".to_owned(),
+            trusted_proxies: Vec::new(),
         }
     }
 }

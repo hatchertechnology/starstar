@@ -13,8 +13,12 @@
 //! SCAFFOLD: until the auth part lands, every extractor accepts every request
 //! as an anonymous admin. Do not deploy this build.
 
+pub mod client_ip;
+pub mod clock;
 pub mod crypto;
 pub mod password;
+pub mod ratelimit;
+pub mod startup;
 
 use axum::Router;
 use axum::extract::FromRequestParts;

@@ -13,6 +13,7 @@
 //!   authenticated (except a small allowlist) and puts the [`Caller`] into the
 //!   request extensions, where the extractors find it.
 
+pub mod apps;
 pub mod client_ip;
 pub mod clock;
 pub mod cookies;
@@ -227,6 +228,7 @@ pub fn router(state: AppState) -> Router {
         .merge(session::routes())
         .merge(setup::routes())
         .merge(users::routes())
+        .merge(apps::routes())
         .merge(oauth::routes())
         .with_state(state)
 }

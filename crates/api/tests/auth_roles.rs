@@ -17,6 +17,9 @@ const AUTH_ROUTES: &[(&str, &str, Role)] = &[
     ("POST", "/api/users", Role::Admin),
     ("PATCH", "/api/users/someone", Role::Admin),
     ("DELETE", "/api/users/someone", Role::Admin),
+    ("GET", "/api/apps", Role::Viewer),
+    ("GET", "/api/apps?all=true", Role::Admin),
+    ("DELETE", "/api/apps/ss_gr_x", Role::Viewer),
 ];
 
 /// Every /api and /mcp path served today, plus paths no route matches. The

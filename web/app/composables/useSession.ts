@@ -48,6 +48,16 @@ export function useSession() {
     }
   }
 
+  /** Re-reads the session (role, CSRF token) after something changed it server-side. */
+  async function refresh(): Promise<void> {
+    try {
+      user.value = await api<SessionInfo>('/api/session', { skipUnauthorizedHook: true })
+    } catch (e) {
+      if (e instanceof ApiRequestError && e.status === 401) user.value = null
+      else throw e
+    }
+  }
+
   function clear() {
     user.value = null
     loaded.value = true
@@ -57,5 +67,5 @@ export function useSession() {
     return roleAtLeast(user.value?.role, role)
   }
 
-  return { user, loaded, load, signIn, setup, signOut, can, clear }
+  return { user, loaded, load, signIn, setup, signOut, can, clear, refresh }
 }

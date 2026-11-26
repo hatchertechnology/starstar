@@ -66,7 +66,11 @@ export function createApi(deps: ApiDeps): Api {
     let res: Response
     try {
       res = await deps.fetch(url, { method, headers, body, credentials: 'same-origin', signal: opts.signal })
-    } catch {
+    } catch (e) {
+      // An abort is the client's own timeout: starstar answered, the printer is slow.
+      if (e instanceof DOMException && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+        throw new ApiRequestError(0, 'The printer is taking too long to answer.')
+      }
       throw new ApiRequestError(0, "Can't reach starstar.")
     }
     if (!res.ok) {

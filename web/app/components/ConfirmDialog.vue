@@ -10,6 +10,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ confirm: []; cancel: [] }>()
 
+const titleId = `confirm-title-${useId()}`
 const dialog = ref<HTMLDialogElement | null>(null)
 const cancelBtn = ref<HTMLButtonElement | null>(null)
 
@@ -28,8 +29,8 @@ watch(() => props.open, sync)
 </script>
 
 <template>
-  <dialog ref="dialog" aria-labelledby="confirm-title" @cancel.prevent="emit('cancel')">
-    <h2 id="confirm-title">{{ title }}</h2>
+  <dialog ref="dialog" :aria-labelledby="titleId" @cancel.prevent="emit('cancel')">
+    <h2 :id="titleId">{{ title }}</h2>
     <p>{{ body }}</p>
     <p v-if="error" class="error-text" role="alert">{{ error }}</p>
     <div class="actions">

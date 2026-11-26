@@ -1,7 +1,7 @@
 import type { Job, PrinterStatus } from '~/types/api'
 import { ApiRequestError } from '~/utils/api'
 import { printerPath } from '~/utils/paths'
-import { POLL_MS, startPoller, type Poller } from '~/utils/poll'
+import { POLL_MS, nextDelay, startPoller, type Poller } from '~/utils/poll'
 
 const TICK_TIMEOUT_MS = 15_000
 
@@ -39,7 +39,7 @@ export function usePrinterPoll(name: string) {
   async function tickAndNote(): Promise<boolean> {
     const ok = await tick()
     // The poller doubles its delay after this resolves; show the delay that will be used.
-    retryInMs.value = ok ? POLL_MS : Math.min(Math.max(poller?.delay ?? POLL_MS, POLL_MS) * 2, 30_000)
+    retryInMs.value = nextDelay(poller?.delay ?? POLL_MS, ok)
     return ok
   }
 

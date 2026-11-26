@@ -55,6 +55,10 @@ describe('createApi', () => {
     const api = createApi({ fetch: (async () => { throw new TypeError('x') }) as unknown as typeof fetch, csrf: () => null, onUnauthorized() {} })
     await expect(api('/api/x')).rejects.toMatchObject({ status: 0, message: "Can't reach starstar." })
   })
+  it('maps an aborted request (client timeout) to its own message', async () => {
+    const api = createApi({ fetch: (async () => { throw new DOMException('aborted', 'AbortError') }) as unknown as typeof fetch, csrf: () => null, onUnauthorized() {} })
+    await expect(api('/api/x')).rejects.toMatchObject({ status: 0, message: 'The printer is taking too long to answer.' })
+  })
   it('returns a Blob when as=blob', async () => {
     const { api } = setup(() => new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } }))
     const b = await api<Blob>('/api/x', { as: 'blob' })

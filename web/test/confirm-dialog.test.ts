@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { defineComponent } from 'vue'
 import ConfirmDialog from '~/components/ConfirmDialog.vue'
 
 const props = { open: true, title: 'Stop it?', body: 'Really.', confirmLabel: 'Stop print', danger: true }
@@ -33,6 +34,19 @@ describe('ConfirmDialog', () => {
     const btn = w.findAll('button').find((b) => b.text() === 'Working…')!
     expect((btn.element as HTMLButtonElement).disabled).toBe(true)
     expect(w.text()).toContain('The printer is busy.')
+    w.unmount()
+  })
+
+  it('ties each dialog to its own heading id, even with two on one page', async () => {
+    const Two = defineComponent({
+      components: { ConfirmDialog },
+      template: '<div><ConfirmDialog open title="A?" body="a" confirm-label="Go" /><ConfirmDialog open title="B?" body="b" confirm-label="Go" /></div>',
+    })
+    const w = await mountSuspended(Two, { attachTo: document.body })
+    const dialogs = w.findAll('dialog')
+    const ids = dialogs.map((d) => d.attributes('aria-labelledby')!)
+    expect(new Set(ids).size).toBe(2)
+    dialogs.forEach((d, i) => expect(d.find('h2').attributes('id')).toBe(ids[i]))
     w.unmount()
   })
 

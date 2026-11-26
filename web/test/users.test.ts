@@ -61,6 +61,32 @@ describe('users page', () => {
     w.unmount()
   })
 
+  it('changing your own role refreshes the session', async () => {
+    const { calls } = stubFetch({
+      'GET /api/users': { body: users },
+      'PATCH /api/users/kerry': { body: { ...users[0], role: 'operator' } },
+      'GET /api/session': { body: { username: 'kerry', role: 'operator', csrf_token: 'ss_cs_y' } },
+    })
+    const w = await mount()
+    await row(w, 'kerry').find('select').setValue('operator')
+    await flush()
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/api/session')).toBe(true)
+    expect((useState('session').value as { role: string }).role).toBe('operator')
+    w.unmount()
+  })
+
+  it('changing another user does not refetch the session', async () => {
+    const { calls } = stubFetch({
+      'GET /api/users': { body: users },
+      'PATCH /api/users/op': { body: { ...users[1], role: 'viewer' } },
+    })
+    const w = await mount()
+    await row(w, 'op').find('select').setValue('viewer')
+    await flush()
+    expect(calls.some((c) => c.path === '/api/session')).toBe(false)
+    w.unmount()
+  })
+
   it('disable PATCHes {"disabled":true}', async () => {
     stubFetch({
       'GET /api/users': { body: users },

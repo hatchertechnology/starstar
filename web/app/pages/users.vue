@@ -8,7 +8,7 @@ definePageMeta({ minRole: 'admin' })
 useHead({ title: 'Users · starstar' })
 
 const api = useApi()
-const { user: me } = useSession()
+const { user: me, refresh: refreshSession } = useSession()
 const users = ref<UserSummary[] | null>(null)
 const listError = ref<string | null>(null)
 const rowError = reactive<Record<string, string>>({})
@@ -43,6 +43,7 @@ async function changeRole(u: UserSummary, ev: Event) {
   const select = ev.target as HTMLSelectElement
   const ok = await patch(u, { role: select.value as Role })
   if (!ok) select.value = u.role
+  else if (u.username === me.value?.username) await refreshSession().catch(() => {})
 }
 
 const removing = ref<UserSummary | null>(null)

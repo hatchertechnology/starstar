@@ -1,0 +1,21 @@
+# Local development database. The API container will be added when PostgreSQL
+# support is implemented; credentials here are for local development only.
+services:
+  db:
+    image: docker.io/library/postgres:17-bookworm
+    environment:
+      POSTGRES_DB: starstar
+      POSTGRES_USER: starstar
+      POSTGRES_PASSWORD: starstar-dev
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U starstar -d starstar"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:

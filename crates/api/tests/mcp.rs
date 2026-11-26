@@ -420,3 +420,111 @@ async fn disabled_user_gets_401_on_next_mcp_request() {
         r#"Bearer error="invalid_token", resource_metadata="http://127.0.0.1:8080/.well-known/oauth-protected-resource/mcp""#
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn end_to_end_initialize_and_tools_call_over_tcp() {
+    let api = TestApi::start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = api.app.clone();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let http = reqwest::Client::new();
+
+    // 1. No token: 401 with the /mcp challenge, and the metadata it points to exists.
+    let r = http
+        .post(format!("{base}/mcp"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(rpc_body("tools/list", json!({})).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+    let challenge = r.headers()["www-authenticate"].to_str().unwrap().to_owned();
+    assert!(
+        challenge.contains("/.well-known/oauth-protected-resource/mcp\""),
+        "{challenge}"
+    );
+    let r = http
+        .get(format!("{base}/.well-known/oauth-protected-resource/mcp"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let doc: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(doc["resource"], "http://127.0.0.1:8080/mcp");
+
+    // 2-7. A signed-in operator talks MCP.
+    let token = common::token_for(&api.state, "agent", Role::Operator);
+    let send = |body: serde_json::Value, version: bool| {
+        let mut req = http
+            .post(format!("{base}/mcp"))
+            .bearer_auth(&token)
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        if version {
+            req = req.header("mcp-protocol-version", "2025-11-25");
+        }
+        req.body(body.to_string()).send()
+    };
+    let r = send(
+        rpc_body(
+            "initialize",
+            json!({"protocolVersion": "2025-11-25", "capabilities": {},
+                   "clientInfo": {"name": "e2e", "version": "1"}}),
+        ),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(
+        r.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json")
+    );
+    let msg: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(msg["result"]["serverInfo"]["name"], "starstar");
+
+    let r = send(
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 202);
+
+    let r = send(rpc_body("tools/list", json!({})), true).await.unwrap();
+    let msg: serde_json::Value = r.json().await.unwrap();
+    let names: Vec<&str> = msg["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"pause_job"));
+    assert!(!names.contains(&"apply_update"));
+
+    let call = |name: &str, args: serde_json::Value| {
+        send(
+            rpc_body("tools/call", json!({"name": name, "arguments": args})),
+            true,
+        )
+    };
+    let r = call("printer_status", json!({"printer": "mk4"}))
+        .await
+        .unwrap();
+    let msg: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(msg["result"]["structuredContent"]["status"]["name"], "mk4");
+
+    let r = call("pause_job", json!({"printer": "mk4"})).await.unwrap();
+    let msg: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(msg["result"]["content"][0]["text"], "Paused job 42 on mk4.");
+    assert!(
+        api.fake
+            .authorized(Method::PUT)
+            .iter()
+            .any(|r| r.uri == "/api/v1/job/42/pause")
+    );
+}

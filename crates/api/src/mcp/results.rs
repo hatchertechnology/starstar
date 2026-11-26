@@ -11,6 +11,7 @@ use serde_json::json;
 
 use crate::auth::Caller;
 use crate::error::ApiError;
+use crate::printers::cameras::Snapshot;
 
 /// The caller `require_auth` put into this request. Missing only if `/mcp`
 /// were ever mounted outside the auth layer.
@@ -72,6 +73,14 @@ macro_rules! tool_try {
     };
 }
 pub(crate) use tool_try;
+
+/// A picture as image content (standard base64).
+pub(crate) fn image_ok(snapshot: Snapshot) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::image(
+        STANDARD.encode(&snapshot.bytes),
+        snapshot.content_type,
+    )])
+}
 
 /// Maps an operation's result to a tool result.
 pub(crate) fn outcome<T>(

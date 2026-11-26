@@ -4,7 +4,7 @@
 
 use starstar_shared::Role;
 
-use crate::printers::{files, jobs, registry, telemetry, transfer};
+use crate::printers::{cameras, files, jobs, registry, telemetry, transfer, update};
 
 pub(crate) fn tool_role(name: &str) -> Option<Role> {
     Some(match name {
@@ -25,6 +25,21 @@ pub(crate) fn tool_role(name: &str) -> Option<Role> {
         "upload_file" => files::UPLOAD_FILE_ROLE,
         "start_print" => files::PRINT_FILE_ROLE,
         "delete_file" => files::DELETE_FILE_ROLE,
+        "register_printer" => registry::REGISTER_PRINTER_ROLE,
+        "remove_printer" => registry::REMOVE_PRINTER_ROLE,
+        "list_cameras" => cameras::LIST_CAMERAS_ROLE,
+        "get_camera" => cameras::CAMERA_DETAIL_ROLE,
+        "camera_snapshot" => cameras::SNAPSHOT_ROLE,
+        "take_snapshot" => cameras::TAKE_SNAPSHOT_ROLE,
+        "order_cameras" => cameras::ORDER_CAMERAS_ROLE,
+        "register_camera" => cameras::REGISTER_CAMERA_ROLE,
+        "remove_camera" => cameras::REMOVE_CAMERA_ROLE,
+        "configure_camera" => cameras::UPDATE_CAMERA_CONFIG_ROLE,
+        "reset_camera_config" => cameras::RESET_CAMERA_CONFIG_ROLE,
+        "connect_camera" => cameras::CONNECT_CAMERA_ROLE,
+        "disconnect_camera" => cameras::DISCONNECT_CAMERA_ROLE,
+        "check_update" => update::CHECK_UPDATE_ROLE,
+        "apply_update" => update::APPLY_UPDATE_ROLE,
         _ => return None,
     })
 }

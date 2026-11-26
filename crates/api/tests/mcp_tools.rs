@@ -385,3 +385,176 @@ async fn start_print_and_delete_file() {
     let del = api.fake.authorized(Method::DELETE);
     assert_eq!(del.last().unwrap().headers["force"], "?1");
 }
+
+#[tokio::test]
+async fn camera_snapshot_returns_image_content() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Viewer);
+    let res = call_tool(&api, &t, "camera_snapshot", json!({"printer": "mk4"})).await;
+    assert_eq!(res["isError"], false, "{res}");
+    assert_eq!(res["content"][0]["type"], "image");
+    assert_eq!(res["content"][0]["mimeType"], "image/png");
+    assert_eq!(
+        STANDARD
+            .decode(res["content"][0]["data"].as_str().unwrap())
+            .unwrap(),
+        b"\x89PNG\r\n\x1a\nfake"
+    );
+    assert!(res.get("structuredContent").is_none());
+    call_tool(
+        &api,
+        &t,
+        "camera_snapshot",
+        json!({"printer": "mk4", "id": "cam1"}),
+    )
+    .await;
+    assert!(fake_saw(&api, Method::GET, "/api/v1/cameras/cam1/snap"));
+    api.fake
+        .set(Method::GET, "/api/v1/cameras/snap", Canned::empty(204));
+    let res = call_tool(&api, &t, "camera_snapshot", json!({"printer": "mk4"})).await;
+    assert_eq!(text(&res), "No picture yet.");
+    assert_eq!(res["isError"], false);
+}
+
+#[tokio::test]
+async fn take_snapshot_posts_and_returns_image() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Operator);
+    let res = call_tool(
+        &api,
+        &t,
+        "take_snapshot",
+        json!({"printer": "mk4", "id": "cam1"}),
+    )
+    .await;
+    assert_eq!(res["content"][0]["type"], "image");
+    assert!(fake_saw(&api, Method::POST, "/api/v1/cameras/cam1/snap"));
+}
+
+#[tokio::test]
+async fn camera_admin_tools_forward() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Admin);
+    let p = |extra: serde_json::Value| {
+        let mut v = json!({"printer": "mk4"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let res = call_tool(&api, &t, "list_cameras", p(json!({}))).await;
+    assert_eq!(res["structuredContent"]["cameras"][0]["id"], "cam1");
+    let res = call_tool(&api, &t, "get_camera", p(json!({"id": "cam1"}))).await;
+    assert_eq!(res["structuredContent"]["camera"]["name"], "Buddy3D");
+    let res = call_tool(&api, &t, "order_cameras", p(json!({"ids": ["cam1"]}))).await;
+    assert_eq!(text(&res), "Reordered cameras on mk4.");
+    assert!(fake_saw(&api, Method::PUT, "/api/v1/cameras"));
+    let res = call_tool(
+        &api,
+        &t,
+        "register_camera",
+        p(json!({"id": "cam1", "name": "Bed"})),
+    )
+    .await;
+    assert_eq!(text(&res), "Registered camera cam1 on mk4.");
+    let post = api
+        .fake
+        .authorized(Method::POST)
+        .into_iter()
+        .find(|r| r.uri == "/api/v1/cameras/cam1")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&post.body).contains("Bed"));
+    let res = call_tool(
+        &api,
+        &t,
+        "configure_camera",
+        p(json!({"id": "cam1", "trigger_scheme": "each_layer", "resolution": {"width": 1280, "height": 720}})),
+    )
+    .await;
+    assert_eq!(text(&res), "Configured camera cam1 on mk4.");
+    assert!(fake_saw(&api, Method::PATCH, "/api/v1/cameras/cam1/config"));
+    for (tool, verb) in [
+        ("reset_camera_config", "Reset the configuration of"),
+        ("connect_camera", "Connected"),
+        ("disconnect_camera", "Disconnected"),
+        ("remove_camera", "Removed"),
+    ] {
+        let res = call_tool(&api, &t, tool, p(json!({"id": "cam1"}))).await;
+        assert_eq!(res["isError"], false, "{tool}: {res}");
+        assert_eq!(text(&res), format!("{verb} camera cam1 on mk4."));
+    }
+    assert!(fake_saw(
+        &api,
+        Method::DELETE,
+        "/api/v1/cameras/cam1/config"
+    ));
+    assert!(fake_saw(
+        &api,
+        Method::POST,
+        "/api/v1/cameras/cam1/connection"
+    ));
+    assert!(fake_saw(
+        &api,
+        Method::DELETE,
+        "/api/v1/cameras/cam1/connection"
+    ));
+    assert!(fake_saw(&api, Method::DELETE, "/api/v1/cameras/cam1"));
+    let res = call_tool(&api, &t, "get_camera", p(json!({"id": "../x"}))).await;
+    assert_eq!(res["structuredContent"]["status"], 400);
+}
+
+#[tokio::test]
+async fn update_tools() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Admin);
+    let res = call_tool(&api, &t, "check_update", json!({"printer": "mk4"})).await;
+    assert_eq!(res["structuredContent"]["update"]["env"], "prusalink");
+    assert_eq!(res["structuredContent"]["update"]["available"], true);
+    let res = call_tool(&api, &t, "apply_update", json!({"printer": "mk4"})).await;
+    assert_eq!(text(&res), "Started the prusalink update on mk4.");
+    assert!(fake_saw(&api, Method::POST, "/api/v1/update/prusalink"));
+    let res = call_tool(
+        &api,
+        &t,
+        "check_update",
+        json!({"printer": "mk4", "env": "other"}),
+    )
+    .await;
+    assert_eq!(res["structuredContent"]["status"], 400);
+}
+
+#[tokio::test]
+async fn register_printer_never_echoes_password() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Admin);
+    let host = api.fake.addr.to_string();
+    let res = call_tool(
+        &api,
+        &t,
+        "register_printer",
+        json!({"name": "mini", "kind": "mini", "host": host,
+               "username": fake_prusalink::USERNAME, "password": PASSWORD}),
+    )
+    .await;
+    assert_eq!(res["isError"], false, "{res}");
+    assert_eq!(res["structuredContent"]["printer"]["name"], "mini");
+    assert!(!res.to_string().contains(PASSWORD));
+
+    let wrong = "wrong-secret-pw";
+    let res = call_tool(
+        &api,
+        &t,
+        "register_printer",
+        json!({"name": "mini2", "kind": "mini", "host": host,
+               "username": fake_prusalink::USERNAME, "password": wrong}),
+    )
+    .await;
+    assert_eq!(res["isError"], true);
+    assert_eq!(res["structuredContent"]["status"], 502);
+    assert!(!res.to_string().contains(wrong));
+
+    let res = call_tool(&api, &t, "remove_printer", json!({"printer": "mini"})).await;
+    assert_eq!(text(&res), "Removed printer mini.");
+    let res = call_tool(&api, &t, "get_printer", json!({"printer": "mini"})).await;
+    assert_eq!(res["structuredContent"]["status"], 404);
+}

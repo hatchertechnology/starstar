@@ -7,8 +7,8 @@ use rmcp::model::CallToolResult;
 use rmcp::{ErrorData, tool, tool_router};
 
 use crate::mcp::StarstarMcp;
-use crate::mcp::params::PrinterArgs;
-use crate::mcp::results::{caller_of, outcome, structured_ok};
+use crate::mcp::params::{PrinterArgs, RegisterPrinterArgs};
+use crate::mcp::results::{caller_of, outcome, structured_ok, text_ok};
 use crate::printers::{registry, telemetry};
 
 #[tool_router(router = printer_tools, vis = "pub(super)")]
@@ -89,6 +89,38 @@ impl StarstarMcp {
         Ok(outcome(
             telemetry::printer_storage(&self.state, &caller, &args.printer).await,
             |v| structured_ok("storage", v),
+        ))
+    }
+
+    #[tool(
+        description = "Registers a printer after checking that starstar can reach it with the given credentials. The password is stored by starstar and never shown again.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn register_printer(
+        &self,
+        Parameters(args): Parameters<RegisterPrinterArgs>,
+        Extension(parts): Extension<Parts>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let caller = caller_of(&parts)?;
+        Ok(outcome(
+            registry::register_printer(&self.state, &caller, args.into()).await,
+            |v| structured_ok("printer", v),
+        ))
+    }
+
+    #[tool(
+        description = "Removes a printer from starstar. The printer itself is not changed.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    async fn remove_printer(
+        &self,
+        Parameters(args): Parameters<PrinterArgs>,
+        Extension(parts): Extension<Parts>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let caller = caller_of(&parts)?;
+        Ok(outcome(
+            registry::remove_printer(&self.state, &caller, &args.printer).await,
+            |()| text_ok(format!("Removed printer {}.", args.printer)),
         ))
     }
 }

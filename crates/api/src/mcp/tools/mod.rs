@@ -5,12 +5,16 @@ use rmcp::handler::server::router::tool::ToolRouter;
 
 use super::StarstarMcp;
 
+mod cameras;
 mod files;
 mod jobs;
 mod printers;
 
 pub(crate) fn all_tools() -> ToolRouter<StarstarMcp> {
-    StarstarMcp::printer_tools() + StarstarMcp::job_tools() + StarstarMcp::file_tools()
+    StarstarMcp::printer_tools()
+        + StarstarMcp::job_tools()
+        + StarstarMcp::file_tools()
+        + StarstarMcp::camera_tools()
 }
 
 /// The description of `upload_file`, with the limit this server is set to.

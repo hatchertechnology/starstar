@@ -5,6 +5,8 @@ mod mcp_support;
 use std::time::Duration;
 
 use axum::http::Method;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use fake_prusalink::{Canned, PASSWORD, TestApi};
 use mcp_support::*;
 use serde_json::json;
@@ -147,4 +149,239 @@ async fn printer_errors_become_tool_errors() {
     api.fake.set_delay(Duration::from_secs(2));
     let res = call_tool(&api, &t, "printer_status", json!({"printer": "mk4"})).await;
     assert_eq!(res["structuredContent"]["status"], 504);
+}
+
+fn b64(bytes: &[u8]) -> String {
+    STANDARD.encode(bytes)
+}
+
+fn wrap(encoded: &str, columns: usize) -> String {
+    encoded
+        .as_bytes()
+        .chunks(columns)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join("\r\n")
+}
+
+fn puts(api: &TestApi) -> Vec<fake_prusalink::Recorded> {
+    api.fake.authorized(Method::PUT)
+}
+
+#[tokio::test]
+async fn list_files_and_file_state() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Viewer);
+    let res = call_tool(
+        &api,
+        &t,
+        "list_files",
+        json!({"printer": "mk4", "storage": "usb"}),
+    )
+    .await;
+    assert_eq!(res["isError"], false, "{res}");
+    assert!(res["structuredContent"]["entry"]["children"].is_array());
+    let res = call_tool(
+        &api,
+        &t,
+        "list_files",
+        json!({"printer": "mk4", "storage": "usb", "path": "cube-12mm.bgcode"}),
+    )
+    .await;
+    assert_eq!(
+        res["structuredContent"]["entry"]["name"],
+        "cube-12mm.bgcode"
+    );
+    let res = call_tool(
+        &api,
+        &t,
+        "file_state",
+        json!({"printer": "mk4", "storage": "usb", "path": "cube-12mm.bgcode"}),
+    )
+    .await;
+    assert_eq!(res["structuredContent"]["state"]["read_only"], false);
+    assert_eq!(res["structuredContent"]["state"]["currently_printed"], true);
+
+    let res = call_tool(
+        &api,
+        &t,
+        "list_files",
+        json!({"printer": "mk4", "storage": "usb", "path": "../etc"}),
+    )
+    .await;
+    assert_eq!(res["structuredContent"]["status"], 400);
+    assert!(api.fake.requests().iter().all(|r| !r.uri.contains("etc")));
+}
+
+#[tokio::test]
+async fn upload_file_sends_decoded_bytes_with_options() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Operator);
+    let res = call_tool(
+        &api,
+        &t,
+        "upload_file",
+        json!({"printer": "mk4", "storage": "usb", "path": "jobs/cube.bgcode",
+               "content_base64": b64(b"G28\nG1 X10\n"), "overwrite": true, "print": true}),
+    )
+    .await;
+    assert_eq!(res["isError"], false, "{res}");
+    assert_eq!(
+        text(&res),
+        "Uploaded jobs/cube.bgcode to mk4:usb. Printing started."
+    );
+    let sent = puts(&api)
+        .into_iter()
+        .find(|r| r.uri == "/api/v1/files/usb/jobs/cube.bgcode")
+        .expect("upload reached the printer");
+    assert_eq!(sent.body, b"G28\nG1 X10\n");
+    assert_eq!(sent.headers["overwrite"], "?1");
+    assert_eq!(sent.headers["print-after-upload"], "?1");
+}
+
+#[tokio::test]
+async fn upload_cap_boundary() {
+    let api = TestApi::start_with(Config {
+        mcp_max_upload_bytes: 16,
+        ..Default::default()
+    })
+    .await;
+    let t = token(&api, Role::Operator);
+    let args = |n: usize| json!({"printer": "mk4", "storage": "usb", "path": "a.gcode", "content_base64": b64(&vec![b'x'; n])});
+    let res = call_tool(&api, &t, "upload_file", args(16)).await;
+    assert_eq!(res["isError"], false, "{res}");
+    let res = call_tool(&api, &t, "upload_file", args(17)).await;
+    assert_eq!(res["isError"], true);
+    assert_eq!(res["structuredContent"]["status"], 413);
+    assert_eq!(
+        res["structuredContent"]["error"],
+        "file is larger than the MCP upload limit of 16 bytes; upload it with `starstar files upload` instead"
+    );
+    assert_eq!(puts(&api).len(), 1);
+}
+
+#[tokio::test]
+async fn upload_cap_boundary_at_one_mib_with_wrapped_base64() {
+    let api = TestApi::start_with(Config {
+        mcp_max_upload_bytes: 1024 * 1024,
+        ..Default::default()
+    })
+    .await;
+    let t = token(&api, Role::Operator);
+    let args = |n: usize| {
+        json!({"printer": "mk4", "storage": "usb", "path": "a.gcode",
+               "content_base64": wrap(&b64(&vec![b'x'; n]), 76)})
+    };
+    let res = call_tool(&api, &t, "upload_file", args(1024 * 1024)).await;
+    assert_eq!(res["isError"], false, "{res}");
+    assert_eq!(puts(&api)[0].body.len(), 1024 * 1024);
+    let res = call_tool(&api, &t, "upload_file", args(1024 * 1024 + 1)).await;
+    assert_eq!(res["structuredContent"]["status"], 413);
+    assert_eq!(puts(&api).len(), 1);
+}
+
+#[tokio::test]
+async fn upload_accepts_wrapped_base64() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Operator);
+    let content = b"G28\nG1 X10 Y10 F3000\nM104 S0\n";
+    let spaced: String = b64(content)
+        .as_bytes()
+        .chunks(4)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\r\n";
+    let res = call_tool(
+        &api,
+        &t,
+        "upload_file",
+        json!({"printer": "mk4", "storage": "usb", "path": "a.gcode", "content_base64": spaced}),
+    )
+    .await;
+    assert_eq!(res["isError"], false, "{res}");
+    assert_eq!(puts(&api)[0].body, content);
+}
+
+#[tokio::test]
+async fn upload_rejects_invalid_base64() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Operator);
+    let res = call_tool(
+        &api,
+        &t,
+        "upload_file",
+        json!({"printer": "mk4", "storage": "usb", "path": "a.gcode", "content_base64": "not base64!"}),
+    )
+    .await;
+    assert_eq!(res["structuredContent"]["status"], 400);
+    assert!(puts(&api).is_empty());
+}
+
+#[tokio::test]
+async fn upload_checks_the_role_before_decoding() {
+    let api = TestApi::start_with(Config {
+        mcp_max_upload_bytes: 16,
+        ..Default::default()
+    })
+    .await;
+    let t = token(&api, Role::Viewer);
+    let res = call_tool(
+        &api,
+        &t,
+        "upload_file",
+        json!({"printer": "mk4", "storage": "usb", "path": "a.gcode", "content_base64": b64(&[0u8; 100])}),
+    )
+    .await;
+    assert_eq!(res["structuredContent"]["status"], 403);
+    assert!(api.fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn upload_description_names_the_configured_limit() {
+    let api = TestApi::start().await;
+    let t = token(&api, Role::Operator);
+    let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
+    let msg = rpc_result(&r);
+    let upload = msg["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "upload_file")
+        .unwrap();
+    assert_eq!(
+        upload["description"],
+        "Uploads a file to printer storage. content_base64 is the whole file, base64-encoded; files over the server's MCP upload limit (25 MB) must go through the starstar CLI instead."
+    );
+}
+
+#[tokio::test]
+async fn start_print_and_delete_file() {
+    let api = TestApi::start().await;
+    let op = token(&api, Role::Operator);
+    let res = call_tool(
+        &api,
+        &op,
+        "start_print",
+        json!({"printer": "mk4", "storage": "usb", "path": "cube-12mm.bgcode"}),
+    )
+    .await;
+    assert_eq!(text(&res), "Started printing cube-12mm.bgcode on mk4.");
+    assert!(fake_saw(
+        &api,
+        Method::POST,
+        "/api/v1/files/usb/cube-12mm.bgcode"
+    ));
+
+    let admin = token(&api, Role::Admin);
+    let res = call_tool(
+        &api,
+        &admin,
+        "delete_file",
+        json!({"printer": "mk4", "storage": "usb", "path": "cube-12mm.bgcode", "force": true}),
+    )
+    .await;
+    assert_eq!(text(&res), "Deleted cube-12mm.bgcode from mk4:usb.");
+    let del = api.fake.authorized(Method::DELETE);
+    assert_eq!(del.last().unwrap().headers["force"], "?1");
 }

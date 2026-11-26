@@ -68,6 +68,14 @@ impl ServerHandler for StarstarMcp {
             .list_all()
             .into_iter()
             .filter(|t| catalog::tool_role(&t.name).is_some_and(|r| r <= caller.role))
+            .map(|mut t| {
+                if t.name == "upload_file" {
+                    t.description = Some(
+                        tools::upload_description(self.state.config.mcp_max_upload_bytes).into(),
+                    );
+                }
+                t
+            })
             .collect();
         Ok(ListToolsResult {
             result_type: Some(ResultType::COMPLETE),

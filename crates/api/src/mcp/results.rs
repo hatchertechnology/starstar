@@ -1,6 +1,8 @@
 //! Building tool results, and reading the caller of a request.
 
 use axum::http::request::Parts;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer};
@@ -80,4 +82,42 @@ pub(crate) fn outcome<T>(
         Ok(value) => ok(value),
         Err(err) => tool_error(err),
     }
+}
+
+const MIB: u64 = 1024 * 1024;
+
+/// The size limit as people write it: `25 MB`, or bytes below one MiB.
+pub(crate) fn format_limit(max: u64) -> String {
+    if max >= MIB {
+        format!("{} MB", max / MIB)
+    } else {
+        format!("{max} bytes")
+    }
+}
+
+pub(crate) fn upload_too_large(max: u64) -> ApiError {
+    ApiError::PayloadTooLarge(format!(
+        "file is larger than the MCP upload limit of {}; upload it with `starstar files upload` instead",
+        format_limit(max)
+    ))
+}
+
+/// Decodes the base64 of an upload. ASCII whitespace is ignored (agents wrap
+/// lines). The length is checked before decoding, so an oversized payload
+/// never allocates the file.
+pub(crate) fn decode_upload(content_base64: &str, max: u64) -> Result<Vec<u8>, ApiError> {
+    let cleaned: String = content_base64
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    if cleaned.len() as u64 > max.div_ceil(3) * 4 {
+        return Err(upload_too_large(max));
+    }
+    let bytes = STANDARD
+        .decode(cleaned)
+        .map_err(|_| ApiError::BadRequest("content_base64 is not valid base64".to_owned()))?;
+    if bytes.len() as u64 > max {
+        return Err(upload_too_large(max));
+    }
+    Ok(bytes)
 }

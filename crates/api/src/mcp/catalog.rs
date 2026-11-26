@@ -4,7 +4,7 @@
 
 use starstar_shared::Role;
 
-use crate::printers::{jobs, registry, telemetry, transfer};
+use crate::printers::{files, jobs, registry, telemetry, transfer};
 
 pub(crate) fn tool_role(name: &str) -> Option<Role> {
     Some(match name {
@@ -20,6 +20,11 @@ pub(crate) fn tool_role(name: &str) -> Option<Role> {
         "stop_job" => jobs::STOP_JOB_ROLE,
         "get_transfer" => transfer::CURRENT_TRANSFER_ROLE,
         "cancel_transfer" => transfer::CANCEL_TRANSFER_ROLE,
+        "list_files" => files::FILE_INFO_ROLE,
+        "file_state" => files::FILE_STATE_ROLE,
+        "upload_file" => files::UPLOAD_FILE_ROLE,
+        "start_print" => files::PRINT_FILE_ROLE,
+        "delete_file" => files::DELETE_FILE_ROLE,
         _ => return None,
     })
 }

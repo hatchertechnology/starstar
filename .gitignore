@@ -26,3 +26,10 @@ rustc-ice-*.txt
 # Local starstar API database; it holds printer passwords
 starstar.db
 starstar.db-*
+
+# Nuxt web UI
+web/node_modules/
+web/.output/
+web/.nuxt/
+web/.data/
+web/coverage/

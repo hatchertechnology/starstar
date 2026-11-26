@@ -14,6 +14,7 @@ pub mod printers;
 pub mod prusalink;
 pub mod routes;
 pub mod store;
+pub mod web;
 
 use config::Config;
 use store::PrinterStore;
@@ -32,6 +33,7 @@ pub fn router(state: AppState) -> Router {
     // require_auth must stay the outermost auth layer, after every merge (mcp, web).
     routes::router(state.clone())
         .merge(auth::router(state.clone()))
+        .merge(web::router(state.clone())) // last: owns the only fallback
         .layer(axum::middleware::from_fn_with_state(
             state,
             auth::require_auth,

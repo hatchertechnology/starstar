@@ -29,15 +29,20 @@ pub fn same_origin(a: &Url, public_url: &str) -> bool {
     let Ok(b) = Url::parse(public_url) else {
         return false;
     };
-    let same_host = a.host_str() == b.host_str() || (is_loopback_host(&b) && is_loopback_host(a));
+    let same_host = bare_host(a) == bare_host(&b) || (is_loopback_host(&b) && is_loopback_host(a));
     a.scheme() == b.scheme() && same_host && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// The host without the root-label dot: `print.lan.` is `print.lan`.
+fn bare_host(url: &Url) -> Option<&str> {
+    url.host_str().map(|h| h.strip_suffix('.').unwrap_or(h))
 }
 
 fn is_loopback_host(url: &Url) -> bool {
     match url.host() {
         Some(Host::Ipv4(ip)) => ip.is_loopback(),
         Some(Host::Ipv6(ip)) => ip.is_loopback(),
-        Some(Host::Domain(d)) => d == "localhost",
+        Some(Host::Domain(d)) => d.strip_suffix('.').unwrap_or(d) == "localhost",
         None => false,
     }
 }
@@ -236,5 +241,16 @@ mod tests {
         let c = client("ss_cl_w", &["http://127.0.0.1:1/cb"]);
         assert!(!redirect_allowed(&c, "http://127.0.0.1:8080/cb", proxy, B));
         assert!(redirect_allowed(&c, "http://127.0.0.1:9090/cb", proxy, B));
+    }
+
+    #[test]
+    fn a_trailing_dot_does_not_make_a_different_host() {
+        let proxy = "https://print.lan";
+        assert!(!is_registrable("https://print.lan./cb", proxy, B));
+        assert!(!is_registrable("https://PRINT.LAN./cb", proxy, B));
+        let c = client("ss_cl_d", &["https://print.lan./cb"]);
+        assert!(!redirect_allowed(&c, "https://print.lan./cb", proxy, B));
+        // Other hosts are unaffected.
+        assert!(is_registrable("https://app.example.com./cb", proxy, B));
     }
 }

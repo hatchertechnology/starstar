@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use starstar_api::auth::AuthStore;
@@ -36,6 +37,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "starstar api listening on {} (database: {})",
         config.bind, config.database
     );
-    axum::serve(listener, router(state)).await?;
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

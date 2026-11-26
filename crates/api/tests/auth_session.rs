@@ -1,0 +1,212 @@
+//! Cookie sessions, CSRF and the sign-in rate limit.
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::body::Body;
+use axum::http::Request;
+use serde_json::json;
+use starstar_api::config::Config;
+use starstar_api::router;
+use starstar_shared::Role;
+
+mod common;
+use common::*;
+
+async fn post_login(app: &Router, user: &str, pw: &str) -> TestResponse {
+    post_json(
+        app,
+        "/api/session",
+        json!({"username": user, "password": pw}),
+    )
+    .await
+}
+
+fn get(b: Browser, path: &str) -> Request<Body> {
+    b.cookie_only(Request::get(path))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn login_sets_cookies_and_get_session_returns_user() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Operator);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let r = send(
+        &app,
+        b.cookie_only(Request::get("/api/session"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.json()["username"], "kerry");
+    assert_eq!(r.json()["role"], "operator");
+    assert_eq!(r.json()["csrf_token"], b.csrf.as_str());
+    let r = send(&app, get(b, "/api/me")).await;
+    assert_eq!(r.status, 200);
+}
+
+#[tokio::test]
+async fn session_cookie_attributes() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let r = post_login(&app, "kerry", "pw-kerry-123").await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.headers["cache-control"], "no-store");
+    assert!(!r.body.contains("pw-kerry-123"));
+    let cookies: Vec<String> = r
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_owned())
+        .collect();
+    let session = cookies
+        .iter()
+        .find(|c| c.starts_with("starstar_session="))
+        .unwrap();
+    assert!(session.contains("HttpOnly") && session.contains("SameSite=Lax"));
+    assert!(!session.contains("Secure"));
+    let csrf = cookies
+        .iter()
+        .find(|c| c.starts_with("starstar_csrf="))
+        .unwrap();
+    assert!(!csrf.contains("HttpOnly"));
+
+    // https public URL: both cookies are Secure.
+    let mut state = test_state();
+    state.config = Arc::new(Config {
+        public_url: "https://print.example.com".into(),
+        ..Config::default()
+    });
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let app = router(state);
+    let r = post_login(&app, "kerry", "pw-kerry-123").await;
+    assert_eq!(r.status, 200);
+    for c in r.headers.get_all("set-cookie") {
+        assert!(c.to_str().unwrap().contains("Secure"));
+    }
+}
+
+#[tokio::test]
+async fn unsafe_cookie_requests_need_csrf() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let req = b
+        .cookie_only(Request::delete("/api/session"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, req).await.status, 403);
+    let wrong = b
+        .cookie_only(Request::delete("/api/session"))
+        .header("x-csrf-token", "ss_cs_wrong");
+    assert_eq!(
+        send(&app, wrong.body(Body::empty()).unwrap()).await.status,
+        403
+    );
+    let ok = send(
+        &app,
+        b.apply(Request::delete("/api/session"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(ok.status, 204);
+    assert!(
+        ok.headers
+            .get_all("set-cookie")
+            .iter()
+            .all(|v| v.to_str().unwrap().contains("Max-Age=0"))
+    );
+    assert_eq!(send(&app, get(b, "/api/session")).await.status, 401);
+}
+
+#[tokio::test]
+async fn bearer_callers_cannot_delete_a_session() {
+    let (app, state) = test_app();
+    let req = authorize(Request::delete("/api/session"), &state, Role::Viewer)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, req).await.status, 400);
+}
+
+#[tokio::test]
+async fn login_failures_are_uniform_and_rate_limited() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    create_user(&state, "off", "pw-off-1234", Role::Viewer);
+    create_user(&state, "boss", "pw-boss-123", Role::Admin);
+    state.auth.update_user("off", None, Some(true)).unwrap();
+    let unknown = post_login(&app, "ghost", "whatever-123").await;
+    let wrong = post_login(&app, "kerry", "not-the-password").await;
+    let disabled = post_login(&app, "off", "pw-off-1234").await;
+    let malformed = post_login(&app, "Not A User!", "whatever-123").await;
+    for r in [&unknown, &wrong, &disabled, &malformed] {
+        assert_eq!(r.status, 401);
+    }
+    assert_eq!(unknown.body, wrong.body);
+    assert_eq!(wrong.body, disabled.body);
+    assert_eq!(wrong.body, malformed.body);
+    for _ in 0..4 {
+        assert_eq!(post_login(&app, "kerry", "nope-nope-1").await.status, 401);
+    }
+    assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 429);
+    // A different user from the same address is not blocked.
+    assert_eq!(post_login(&app, "boss", "pw-boss-123").await.status, 200);
+    state.auth.clock().advance(901);
+    assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
+}
+
+#[tokio::test]
+async fn login_limiter_does_not_grow_for_malformed_usernames() {
+    let (app, _) = test_app();
+    for i in 0..50 {
+        let r = post_login(&app, &format!("bad name {i}"), "whatever-123").await;
+        assert_eq!(r.status, 401);
+    }
+    let long = "a".repeat(5000);
+    assert_eq!(post_login(&app, &long, "whatever-123").await.status, 401);
+    // None of those blocked a real user.
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    for _ in 0..10 {
+        post_login(&app, "Not A User!", "x").await;
+    }
+    assert_eq!(post_login(&app, "kerry", "pw-kerry-123").await.status, 200);
+}
+
+#[tokio::test]
+async fn disabled_user_session_fails_on_next_request() {
+    let (app, state) = test_app();
+    create_user(&state, "boss", "pw-boss-123", Role::Admin);
+    create_user(&state, "v", "pw-v-123456", Role::Viewer);
+    let b = login(&app, "v", "pw-v-123456").await;
+    state.auth.update_user("v", None, Some(true)).unwrap();
+    assert_eq!(send(&app, get(b, "/api/me")).await.status, 401);
+}
+
+#[tokio::test]
+async fn session_expires_after_seven_days() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    state.auth.clock().advance(7 * 86400 - 1);
+    assert_eq!(send(&app, get(b.copy(), "/api/session")).await.status, 200);
+    state.auth.clock().advance(2);
+    assert_eq!(send(&app, get(b, "/api/session")).await.status, 401);
+}
+
+#[tokio::test]
+async fn bearer_header_wins_over_cookie() {
+    let (app, state) = test_app();
+    create_user(&state, "kerry", "pw-kerry-123", Role::Viewer);
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let req = b
+        .cookie_only(Request::get("/api/me"))
+        .header("authorization", "Bearer ss_at_bad")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&app, req).await.status, 401);
+}

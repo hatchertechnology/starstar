@@ -15,9 +15,11 @@
 
 pub mod client_ip;
 pub mod clock;
+pub mod cookies;
 pub mod crypto;
 pub mod password;
 pub mod ratelimit;
+pub mod session;
 pub mod startup;
 pub mod store;
 pub mod users;
@@ -32,6 +34,8 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use starstar_shared::Role;
+use starstar_shared::auth::{CSRF_HEADER, SESSION_COOKIE};
+use store::sessions::SessionCaller;
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -74,7 +78,35 @@ pub async fn authenticate(parts: &mut Parts, state: &AppState) -> Result<Caller,
         let token = token.filter(|t| !t.is_empty()).ok_or_else(invalid)?;
         return state.auth.access_token_caller(token)?.ok_or_else(invalid);
     }
-    Err(ApiError::Unauthorized("sign in required".to_owned()))
+    let session = session_from_parts(parts, state)?;
+    if !matches!(parts.method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        let supplied = parts
+            .headers
+            .get(CSRF_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !crypto::ct_eq(supplied.as_bytes(), session.csrf_token.as_bytes()) {
+            return Err(ApiError::Forbidden(
+                "missing or invalid CSRF token".to_owned(),
+            ));
+        }
+    }
+    let caller = session.caller.clone();
+    parts.extensions.insert(session);
+    Ok(caller)
+}
+
+/// The browser session from the cookie alone, with no CSRF check. For
+/// handlers that do their own CSRF check or only read.
+pub(crate) fn session_from_parts(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<SessionCaller, ApiError> {
+    cookies::get_cookie(&parts.headers, SESSION_COOKIE)
+        .map(|token| state.auth.session_caller(&token))
+        .transpose()?
+        .flatten()
+        .ok_or_else(|| ApiError::Unauthorized("sign in required".to_owned()))
 }
 
 macro_rules! role_extractor {
@@ -189,7 +221,10 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
 
 /// Auth-owned routes (setup, session, users, apps, OAuth).
 pub fn router(state: AppState) -> Router {
-    Router::new().merge(users::routes()).with_state(state)
+    Router::new()
+        .merge(session::routes())
+        .merge(users::routes())
+        .with_state(state)
 }
 
 impl From<AuthStoreError> for ApiError {

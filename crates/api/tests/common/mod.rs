@@ -133,6 +133,13 @@ pub struct Browser {
 }
 
 impl Browser {
+    pub fn copy(&self) -> Browser {
+        Browser {
+            cookie: self.cookie.clone(),
+            csrf: self.csrf.clone(),
+        }
+    }
+
     /// Adds the cookie and the CSRF header.
     pub fn apply(&self, b: Builder) -> Builder {
         self.cookie_only(b)

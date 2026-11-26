@@ -12,9 +12,11 @@ use crate::store::{Db, StoreError};
 use super::clock::Clock;
 use super::crypto::{ct_eq, normalize_setup_code};
 use super::password::Hasher;
+use super::ratelimit::RateLimiter;
 
 pub mod clients;
 pub mod grants;
+pub mod sessions;
 pub mod users;
 
 pub use clients::ClientRecord;
@@ -48,6 +50,7 @@ pub struct AuthStore {
     pub(crate) clock: Clock,
     pub(crate) hasher: Hasher,
     setup_code: Mutex<Option<String>>,
+    login_limiter: RateLimiter,
 }
 
 impl AuthStore {
@@ -57,6 +60,7 @@ impl AuthStore {
             clock,
             hasher,
             setup_code: Mutex::new(None),
+            login_limiter: RateLimiter::new(5, 900),
         };
         store.seed_clients()?;
         Ok(store)
@@ -65,6 +69,11 @@ impl AuthStore {
     /// An empty in-memory store with cheap hashing, for unit tests.
     pub fn open_in_memory(clock: Clock) -> Result<Self, AuthStoreError> {
         Self::new(Db::open_in_memory()?, clock, Hasher::fast_for_tests())
+    }
+
+    /// 5 failed sign-ins per (username, IP) per 900 s.
+    pub fn login_limiter(&self) -> &RateLimiter {
+        &self.login_limiter
     }
 
     pub fn clock(&self) -> &Clock {

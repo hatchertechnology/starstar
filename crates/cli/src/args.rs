@@ -75,7 +75,7 @@ pub enum Command {
     /// List and revoke connected apps (OAuth sign-ins).
     #[command(subcommand)]
     Apps(AppsCommand),
-    /// List and inspect printers.
+    /// Register, list, inspect and remove printers.
     #[command(subcommand)]
     Printer(PrinterCommand),
 }

@@ -218,3 +218,12 @@ pub struct CameraSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_to_connect: Option<bool>,
 }
+
+/// Whether a firmware or software update is available.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateInfo {
+    pub env: String,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_version: Option<String>,
+}

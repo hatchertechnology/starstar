@@ -31,3 +31,4 @@ pub mod paths;
 pub mod registry;
 pub mod telemetry;
 pub mod transfer;
+pub mod update;

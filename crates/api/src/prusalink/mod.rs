@@ -463,6 +463,45 @@ impl PrusaLinkClient {
         Self::image(response).await
     }
 
+    /// Whether an update is available for `env`, and its version if known.
+    pub async fn check_update(&self, env: &str) -> Result<(bool, Option<String>), PrusaError> {
+        #[derive(Deserialize)]
+        struct Update {
+            new_version: Option<String>,
+        }
+        let url = self.endpoint(&["api", "v1", "update", env])?;
+        let response = self.send(Method::GET, url, HeaderMap::new(), None).await?;
+        let status = response.status();
+        let header = response
+            .headers()
+            .get("update-available")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| matches!(v.trim(), "true" | "?1"))
+            .or_else(|| {
+                response
+                    .headers()
+                    .contains_key("update-available")
+                    .then_some(false)
+            });
+        let version = if status == StatusCode::NO_CONTENT {
+            None
+        } else {
+            response
+                .json::<Update>()
+                .await
+                .map_err(|e| PrusaError::Decode(e.to_string()))?
+                .new_version
+        };
+        let available = header.unwrap_or(status == StatusCode::OK && version.is_some());
+        Ok((available, version))
+    }
+
+    /// `POST api/v1/update/{env}`: apply the update. 200 and 204 both succeed.
+    pub async fn apply_update(&self, env: &str) -> Result<(), PrusaError> {
+        self.send_empty(Method::POST, &["api", "v1", "update", env])
+            .await
+    }
+
     async fn image(response: reqwest::Response) -> Result<(String, Bytes), PrusaError> {
         let content_type = response
             .headers()

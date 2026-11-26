@@ -10,7 +10,7 @@ use starstar_shared::{PrinterInfo, PrinterStatus, PrinterSummary, RegisterPrinte
 use crate::AppState;
 use crate::auth::{Admin, Operator, Viewer};
 use crate::error::ApiError;
-use crate::printers::{jobs, registry, telemetry, transfer};
+use crate::printers::{jobs, registry, telemetry, transfer, update};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/printers/{name}/transfer/{id}",
             delete(cancel_transfer),
+        )
+        .route(
+            "/api/printers/{name}/update/{env}",
+            get(check_update).post(apply_update),
         )
 }
 
@@ -161,5 +165,23 @@ async fn cancel_transfer(
     Path((name, id)): Path<(String, u64)>,
 ) -> Result<StatusCode, ApiError> {
     transfer::cancel_transfer(&state, &caller, &name, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn check_update(
+    Admin(caller): Admin,
+    State(state): State<AppState>,
+    Path((name, env)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let info = update::check_update(&state, &caller, &name, &env).await?;
+    Ok(Json(info).into_response())
+}
+
+async fn apply_update(
+    Admin(caller): Admin,
+    State(state): State<AppState>,
+    Path((name, env)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    update::apply_update(&state, &caller, &name, &env).await?;
     Ok(StatusCode::NO_CONTENT)
 }

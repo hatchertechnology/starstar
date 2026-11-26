@@ -125,3 +125,98 @@ async fn unsafe_paths_refused_without_contacting_printer() {
     }
     assert!(api.fake.requests().is_empty());
 }
+
+async fn post(api: &TestApi, uri: &str) -> fake_prusalink::TestResponse {
+    api.call(Role::Operator, Method::POST, uri, &[], Body::empty())
+        .await
+}
+
+#[tokio::test]
+async fn starts_print() {
+    let api = TestApi::start().await;
+    let r = post(&api, "/api/printers/mk4/files/usb/cube-12mm.bgcode/print").await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text());
+    assert!(
+        api.fake
+            .authorized(Method::POST)
+            .iter()
+            .any(|q| q.uri == "/api/v1/files/usb/cube-12mm.bgcode")
+    );
+}
+
+#[tokio::test]
+async fn print_while_busy_is_409() {
+    let api = TestApi::start().await;
+    api.fake.set(
+        Method::POST,
+        "/api/v1/files/usb/cube-12mm.bgcode",
+        Canned::json(409, json!({"title":"Conflict","text":"Printer is busy"})),
+    );
+    let r = post(&api, "/api/printers/mk4/files/usb/cube-12mm.bgcode/print").await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert!(r.json()["error"].as_str().unwrap().contains("busy"));
+}
+
+#[tokio::test]
+async fn post_without_print_suffix_is_404() {
+    let api = TestApi::start().await;
+    let r = post(&api, "/api/printers/mk4/files/usb/cube-12mm.bgcode").await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(
+        r.json()["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown file action")
+    );
+    assert!(api.fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn deletes_file_with_force_header() {
+    let api = TestApi::start().await;
+    for (query, expected) in [("?force=true", "?1"), ("", "?0")] {
+        let r = api
+            .call(
+                Role::Admin,
+                Method::DELETE,
+                &format!("/api/printers/mk4/files/usb/parts{query}"),
+                &[],
+                Body::empty(),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text());
+        let sent = api.fake.authorized(Method::DELETE);
+        let last = sent.last().unwrap();
+        assert_eq!(last.uri, "/api/v1/files/usb/parts");
+        assert_eq!(last.headers["force"], expected);
+    }
+}
+
+#[tokio::test]
+async fn deleting_printed_file_is_409() {
+    let api = TestApi::start().await;
+    api.fake.set(
+        Method::DELETE,
+        "/api/v1/files/usb/cube-12mm.bgcode",
+        Canned::json(
+            409,
+            json!({"title":"Conflict","text":"File is being printed"}),
+        ),
+    );
+    let r = api
+        .call(
+            Role::Admin,
+            Method::DELETE,
+            "/api/printers/mk4/files/usb/cube-12mm.bgcode",
+            &[],
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert!(
+        r.json()["error"]
+            .as_str()
+            .unwrap()
+            .contains("being printed")
+    );
+}

@@ -121,3 +121,11 @@ pub struct FileState {
     pub read_only: bool,
     pub currently_printed: bool,
 }
+
+/// Options for deleting a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DeleteOptions {
+    /// Delete even if the file is read-only or in use.
+    #[serde(default)]
+    pub force: bool,
+}

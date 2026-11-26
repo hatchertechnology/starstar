@@ -1,14 +1,14 @@
 //! File routes. Paths after the storage name are captured whole by `{*path}`.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use starstar_shared::FileEntry;
+use starstar_shared::{DeleteOptions, FileEntry};
 
 use crate::AppState;
-use crate::auth::Viewer;
+use crate::auth::{Admin, Operator, Viewer};
 use crate::error::ApiError;
 use crate::printers::files;
 
@@ -18,7 +18,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/printers/{name}/files/{storage}/{*path}",
             // `.head` goes after `.get` so it replaces axum's implicit HEAD-from-GET.
-            get(file_info).head(file_head),
+            get(file_info)
+                .head(file_head)
+                .post(file_action)
+                .delete(delete_file),
         )
 }
 
@@ -57,4 +60,28 @@ async fn file_head(
         .headers_mut()
         .insert("currently-printed", flag(file.currently_printed));
     Ok(response)
+}
+
+/// `POST …/{path}/print`. axum cannot route segments after `{*path}`, so the
+/// action is the last segment of the captured path.
+async fn file_action(
+    Operator(caller): Operator,
+    State(state): State<AppState>,
+    Path((name, storage, path)): Path<(String, String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let Some(file) = path.strip_suffix("/print") else {
+        return Err(ApiError::NotFound("unknown file action".to_owned()));
+    };
+    files::print_file(&state, &caller, &name, &storage, file).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_file(
+    Admin(caller): Admin,
+    State(state): State<AppState>,
+    Path((name, storage, path)): Path<(String, String, String)>,
+    Query(opts): Query<DeleteOptions>,
+) -> Result<StatusCode, ApiError> {
+    files::delete_file(&state, &caller, &name, &storage, &path, opts).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -1,6 +1,6 @@
 //! Files and folders on a printer's storage.
 
-use starstar_shared::{FileEntry, FileState, Role};
+use starstar_shared::{DeleteOptions, FileEntry, FileState, Role};
 
 use super::paths::{file_segments, resolve_storage};
 use super::{client, find};
@@ -10,6 +10,8 @@ use crate::error::ApiError;
 
 pub const FILE_INFO_ROLE: Role = Role::Viewer;
 pub const FILE_STATE_ROLE: Role = Role::Viewer;
+pub const PRINT_FILE_ROLE: Role = Role::Operator;
+pub const DELETE_FILE_ROLE: Role = Role::Admin;
 
 /// Metadata of a file or folder; `path: None` lists the storage root.
 pub async fn file_info(
@@ -45,4 +47,36 @@ pub async fn file_state(
         read_only,
         currently_printed,
     })
+}
+
+/// Starts printing a file that is already on the printer.
+pub async fn print_file(
+    state: &AppState,
+    caller: &Caller,
+    printer: &str,
+    storage: &str,
+    path: &str,
+) -> Result<(), ApiError> {
+    caller.require(PRINT_FILE_ROLE)?;
+    let printer = find(state, printer)?;
+    let segments = file_segments(path)?;
+    let client = client(state, &printer);
+    let storage = resolve_storage(&client, storage).await?;
+    Ok(client.print_file(&storage, &segments).await?)
+}
+
+pub async fn delete_file(
+    state: &AppState,
+    caller: &Caller,
+    printer: &str,
+    storage: &str,
+    path: &str,
+    opts: DeleteOptions,
+) -> Result<(), ApiError> {
+    caller.require(DELETE_FILE_ROLE)?;
+    let printer = find(state, printer)?;
+    let segments = file_segments(path)?;
+    let client = client(state, &printer);
+    let storage = resolve_storage(&client, storage).await?;
+    Ok(client.delete_file(&storage, &segments, opts.force).await?)
 }

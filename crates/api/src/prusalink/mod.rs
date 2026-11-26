@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use diqwest::WithDigestAuth;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -272,6 +272,30 @@ impl PrusaLinkClient {
                 .is_some_and(|v| matches!(v.trim(), "true" | "?1"))
         };
         Ok((flag("read-only"), flag("currently-printed")))
+    }
+
+    /// `POST api/v1/files/{storage}/{path}`: start printing the file.
+    pub async fn print_file(&self, storage: &str, segments: &[String]) -> Result<(), PrusaError> {
+        let url = self.endpoint(&Self::file_segments(storage, segments))?;
+        self.send(Method::POST, url, HeaderMap::new(), None).await?;
+        Ok(())
+    }
+
+    /// `DELETE api/v1/files/{storage}/{path}` with the `Force` header.
+    pub async fn delete_file(
+        &self,
+        storage: &str,
+        segments: &[String],
+        force: bool,
+    ) -> Result<(), PrusaError> {
+        let url = self.endpoint(&Self::file_segments(storage, segments))?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "force",
+            HeaderValue::from_static(if force { "?1" } else { "?0" }),
+        );
+        self.send(Method::DELETE, url, headers, None).await?;
+        Ok(())
     }
 
     async fn job_action(

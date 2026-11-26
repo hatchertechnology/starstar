@@ -230,6 +230,14 @@ pub fn disconnect_camera(printer: &str, id: &str) -> CliResult<Endpoint> {
     camera_at(Method::DELETE, printer, id, &["connection"])
 }
 
+pub fn update_check(printer: &str, env: &str) -> Endpoint {
+    printer_at(Method::GET, printer, &["update", env])
+}
+
+pub fn update_apply(printer: &str, env: &str) -> Endpoint {
+    printer_at(Method::POST, printer, &["update", env])
+}
+
 /// A place on a printer's storage: `<storage>[/<path…>]`. Segments are kept
 /// apart so each one is encoded on its own and never interpreted as a path.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -66,6 +66,9 @@ pub enum Command {
     /// List, show, configure and take pictures with the printer's cameras.
     #[command(subcommand)]
     Camera(CameraCommand),
+    /// Check for and apply printer firmware updates.
+    #[command(subcommand)]
+    Update(UpdateCommand),
     /// List and inspect printers.
     #[command(subcommand)]
     Printer(PrinterCommand),
@@ -399,5 +402,28 @@ pub enum CameraCommand {
         printer: String,
         /// Camera id.
         id: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UpdateCommand {
+    /// Check whether an update is available.
+    Check {
+        /// Printer name.
+        printer: String,
+        /// What to update. Only `prusalink` is supported.
+        #[arg(long, default_value = "prusalink", value_parser = ["prusalink"])]
+        env: String,
+    },
+    /// Apply an available update. Always needs --yes, even in a terminal.
+    Apply {
+        /// Printer name.
+        printer: String,
+        /// What to update. Only `prusalink` is supported.
+        #[arg(long, default_value = "prusalink", value_parser = ["prusalink"])]
+        env: String,
+        /// Confirm the update. Required.
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }

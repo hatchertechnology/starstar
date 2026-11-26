@@ -14,6 +14,7 @@ pub mod cameras;
 pub mod files;
 pub mod jobs;
 pub mod printers;
+pub mod update;
 
 /// What every command needs. Clients are built on demand, so a command can
 /// refuse (for example without `--yes`) before anything touches a token.
@@ -78,6 +79,7 @@ pub fn dispatch(cli: Cli, out: Output) -> CliResult<()> {
             password_stdin,
         } => account::setup(&ctx, username, setup_code_stdin, password_stdin),
         Command::Printer(c) => printers::run(&ctx, c),
+        Command::Update(c) => update::run(&ctx, c),
         Command::Camera(c) => cameras::run(&ctx, c),
         Command::Files(c) => files::run(&ctx, c),
         Command::Job(c) => jobs::run_job(&ctx, c),

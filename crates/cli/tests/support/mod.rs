@@ -21,7 +21,7 @@ use starstar_shared::auth::{TokenResponse, WhoAmI};
 use starstar_shared::{
     Camera, CameraDetail, FileEntry, FileKind, Health, Job, JobFile, PrintMeta, PrinterInfo,
     PrinterKind, PrinterStatus, PrinterSummary, Resolution, Role, StorageDevice, Transfer,
-    TriggerScheme,
+    TriggerScheme, UpdateInfo,
 };
 
 pub const TOKEN: &str = "ss_at_test";
@@ -557,6 +557,15 @@ fn defaults(method: &str, path: &str) -> Canned {
         ("PUT" | "PATCH" | "POST" | "DELETE", p) if p.starts_with("/api/printers/mk4/cameras/") => {
             Canned::empty(204)
         }
+        ("GET", "/api/printers/mk4/update/prusalink") => Canned::json(
+            200,
+            UpdateInfo {
+                env: "prusalink".into(),
+                available: true,
+                new_version: Some("0.8.1".into()),
+            },
+        ),
+        ("POST", "/api/printers/mk4/update/prusalink") => Canned::empty(204),
         ("POST", "/api/printers") => Canned::json(201, mk4_summary()),
         ("DELETE", "/api/printers/mk4") => Canned::empty(204),
         ("GET", "/api/printers/mk4") => Canned::json(200, mk4_summary()),

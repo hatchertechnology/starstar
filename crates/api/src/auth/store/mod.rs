@@ -13,7 +13,12 @@ use super::clock::Clock;
 use super::crypto::{ct_eq, normalize_setup_code};
 use super::password::Hasher;
 
+pub mod clients;
+pub mod grants;
 pub mod users;
+
+pub use clients::ClientRecord;
+pub use grants::IssuedTokens;
 
 pub use users::UserRecord;
 
@@ -47,12 +52,14 @@ pub struct AuthStore {
 
 impl AuthStore {
     pub fn new(db: Db, clock: Clock, hasher: Hasher) -> Result<Self, AuthStoreError> {
-        Ok(Self {
+        let store = Self {
             db,
             clock,
             hasher,
             setup_code: Mutex::new(None),
-        })
+        };
+        store.seed_clients()?;
+        Ok(store)
     }
 
     /// An empty in-memory store with cheap hashing, for unit tests.

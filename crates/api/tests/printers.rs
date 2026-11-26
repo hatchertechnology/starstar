@@ -84,18 +84,19 @@ async fn fake_printer() -> SocketAddr {
     addr
 }
 
-fn app() -> Router {
-    common::test_app().0
-}
-
 /// Sends one request and returns the status and raw body text.
 async fn send(
     app: &Router,
+    state: &starstar_api::AppState,
     method: Method,
     uri: &str,
     body: Option<Value>,
 ) -> (StatusCode, String) {
-    let mut builder = Request::builder().method(method).uri(uri);
+    let mut builder = common::authorize(
+        Request::builder().method(method).uri(uri),
+        state,
+        starstar_shared::Role::Admin,
+    );
     let body = match body {
         Some(json) => {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -129,10 +130,11 @@ fn registration(name: &str, host: &str) -> Value {
 #[tokio::test]
 async fn registers_printer_and_proxies_read_only_calls() {
     let printer = fake_printer().await;
-    let app = app();
+    let (app, state) = common::test_app();
 
     let (status, body) = send(
         &app,
+        &state,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", &printer.to_string())),
@@ -141,13 +143,13 @@ async fn registers_printer_and_proxies_read_only_calls() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert!(!body.contains(PASSWORD), "password leaked in response");
 
-    let (status, body) = send(&app, Method::GET, "/api/printers", None).await;
+    let (status, body) = send(&app, &state, Method::GET, "/api/printers", None).await;
     assert_eq!(status, StatusCode::OK);
     let list: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert!(!body.contains(PASSWORD), "password leaked in listing");
 
-    let (status, body) = send(&app, Method::GET, "/api/printers/mk4/info", None).await;
+    let (status, body) = send(&app, &state, Method::GET, "/api/printers/mk4/info", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let info: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(info["kind"], "mk4");
@@ -155,32 +157,33 @@ async fn registers_printer_and_proxies_read_only_calls() {
     assert_eq!(info["api_version"], "2.0.0");
     assert_eq!(info["hostname"], "prusa-mk4");
 
-    let (status, body) = send(&app, Method::GET, "/api/printers/mk4/status", None).await;
+    let (status, body) = send(&app, &state, Method::GET, "/api/printers/mk4/status", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let status_json: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(status_json["state"], "IDLE");
     assert_eq!(status_json["nozzle_temp"], 24.6);
     assert_eq!(status_json["bed_target"], 0.0);
 
-    let (status, body) = send(&app, Method::GET, "/api/printers/mk4/storage", None).await;
+    let (status, body) = send(&app, &state, Method::GET, "/api/printers/mk4/storage", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let storage: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(storage[0]["path"], "/usb/");
     assert_eq!(storage[0]["kind"], "USB");
     assert_eq!(storage[0]["available"], true);
 
-    let (status, _) = send(&app, Method::DELETE, "/api/printers/mk4", None).await;
+    let (status, _) = send(&app, &state, Method::DELETE, "/api/printers/mk4", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let (status, _) = send(&app, Method::GET, "/api/printers/mk4", None).await;
+    let (status, _) = send(&app, &state, Method::GET, "/api/printers/mk4", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn rejects_invalid_requests() {
-    let app = app();
+    let (app, state) = common::test_app();
 
     let (status, _) = send(
         &app,
+        &state,
         Method::POST,
         "/api/printers",
         Some(registration("MK4", "127.0.0.1:1")),
@@ -190,6 +193,7 @@ async fn rejects_invalid_requests() {
 
     let (status, _) = send(
         &app,
+        &state,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", "http://127.0.0.1:1")),
@@ -197,19 +201,20 @@ async fn rejects_invalid_requests() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    let (status, _) = send(&app, Method::GET, "/api/printers/ghost/info", None).await;
+    let (status, _) = send(&app, &state, Method::GET, "/api/printers/ghost/info", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, _) = send(&app, Method::DELETE, "/api/printers/ghost", None).await;
+    let (status, _) = send(&app, &state, Method::DELETE, "/api/printers/ghost", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn unreachable_printer_is_not_registered() {
-    let app = app();
+    let (app, state) = common::test_app();
 
     let (status, body) = send(
         &app,
+        &state,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", "127.0.0.1:1")),
@@ -217,17 +222,18 @@ async fn unreachable_printer_is_not_registered() {
     .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
 
-    let (status, _) = send(&app, Method::GET, "/api/printers/mk4", None).await;
+    let (status, _) = send(&app, &state, Method::GET, "/api/printers/mk4", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn duplicate_names_are_rejected() {
     let printer = fake_printer().await;
-    let app = app();
+    let (app, state) = common::test_app();
 
     let (status, _) = send(
         &app,
+        &state,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", &printer.to_string())),
@@ -237,6 +243,7 @@ async fn duplicate_names_are_rejected() {
 
     let (status, _) = send(
         &app,
+        &state,
         Method::POST,
         "/api/printers",
         Some(registration("mk4", &printer.to_string())),

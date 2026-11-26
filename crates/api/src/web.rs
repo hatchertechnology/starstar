@@ -118,14 +118,19 @@ async fn serve(State(state): State<AppState>, req: Request) -> Response {
 /// Adds the headers this module owns. Never touches `X-Frame-Options` or
 /// `Content-Security-Policy`; the auth layer sets those.
 fn finish(mut response: Response, path: &str) -> Response {
-    let ok = response.status() == StatusCode::OK;
+    // 206 and 304 update the stored headers of a cached asset, so they must
+    // keep `immutable` too.
+    let cacheable = matches!(
+        response.status(),
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
+    );
     let headers = response.headers_mut();
     headers.insert(
         HeaderName::from_static("x-content-type-options"),
         HeaderValue::from_static("nosniff"),
     );
     headers.insert(REFERRER_POLICY, HeaderValue::from_static("same-origin"));
-    let immutable = ok && path.starts_with("/_nuxt/") && !path.starts_with("/_nuxt/builds/");
+    let immutable = cacheable && path.starts_with("/_nuxt/") && !path.starts_with("/_nuxt/builds/");
     headers.insert(
         CACHE_CONTROL,
         HeaderValue::from_static(if immutable {

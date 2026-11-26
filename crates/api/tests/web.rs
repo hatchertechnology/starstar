@@ -74,6 +74,39 @@ async fn serves_hashed_asset_with_long_cache() {
 }
 
 #[tokio::test]
+async fn not_modified_hashed_asset_stays_immutable() {
+    let (app, _, _t) = web_app();
+    let first = get(&app, "/_nuxt/app.abc123.js").await;
+    let modified = header(&first, "last-modified").to_owned();
+    assert!(!modified.is_empty());
+    let r = send(
+        &app,
+        Request::get("/_nuxt/app.abc123.js")
+            .header("if-modified-since", modified)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, 304);
+    assert_eq!(
+        header(&r, "cache-control"),
+        "public, max-age=31536000, immutable"
+    );
+    // Build metadata is never immutable, even when revalidated.
+    let first = get(&app, "/_nuxt/builds/latest.json").await;
+    let r = send(
+        &app,
+        Request::get("/_nuxt/builds/latest.json")
+            .header("if-modified-since", header(&first, "last-modified"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, 304);
+    assert_eq!(header(&r, "cache-control"), "no-cache");
+}
+
+#[tokio::test]
 async fn build_metadata_is_not_immutable() {
     let (app, _, _t) = web_app();
     let r = get(&app, "/_nuxt/builds/latest.json").await;
@@ -138,7 +171,12 @@ async fn reserved_prefixes_never_get_index() {
         "/oauth",
     ] {
         let r = get(&app, uri).await;
-        assert_ne!(r.status, 200, "{uri}");
+        assert_eq!(r.status, 404, "{uri}");
+        assert!(
+            header(&r, "content-type").starts_with("application/json"),
+            "{uri}"
+        );
+        assert_eq!(r.json()["error"], "not found", "{uri}");
         assert!(!r.body.contains(MARKER), "{uri}");
     }
     // Normalization tricks still land on the JSON 404, never the SPA.
@@ -150,7 +188,12 @@ async fn reserved_prefixes_never_get_index() {
                 .unwrap(),
         )
         .await;
-        assert_ne!(r.status, 200, "{uri}");
+        assert_eq!(r.status, 404, "{uri}");
+        assert!(
+            header(&r, "content-type").starts_with("application/json"),
+            "{uri}"
+        );
+        assert_eq!(r.json()["error"], "not found", "{uri}");
         assert!(!r.body.contains(MARKER), "{uri}");
     }
     let r = send(
@@ -160,7 +203,9 @@ async fn reserved_prefixes_never_get_index() {
             .unwrap(),
     )
     .await;
-    assert_ne!(r.status, 200);
+    assert_eq!(r.status, 404);
+    assert!(header(&r, "content-type").starts_with("application/json"));
+    assert_eq!(r.json()["error"], "not found");
     assert!(!r.body.contains(MARKER));
     let r = get(&app, "/.well-known/does-not-exist").await;
     assert_eq!(r.json()["error"], "not found");

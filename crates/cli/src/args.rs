@@ -23,4 +23,33 @@ pub struct Cli {
 pub enum Command {
     /// Check that the API is reachable.
     Status,
+    /// List and inspect printers.
+    #[command(subcommand)]
+    Printer(PrinterCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PrinterCommand {
+    /// List registered printers.
+    List,
+    /// Show a registered printer's connection details.
+    Show {
+        /// Printer name.
+        name: String,
+    },
+    /// Show firmware and hardware details from the printer.
+    Info {
+        /// Printer name.
+        name: String,
+    },
+    /// Show the printer's state and temperatures.
+    Status {
+        /// Printer name.
+        name: String,
+    },
+    /// List storage devices on the printer.
+    Storage {
+        /// Printer name.
+        name: String,
+    },
 }

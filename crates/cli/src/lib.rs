@@ -6,7 +6,9 @@ pub mod commands;
 pub mod credentials;
 pub mod endpoints;
 pub mod error;
+pub mod oauth;
 pub mod output;
+pub mod session;
 
 use clap::Parser;
 

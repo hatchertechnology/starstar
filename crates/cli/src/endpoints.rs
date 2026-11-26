@@ -38,6 +38,41 @@ pub fn health() -> Endpoint {
     Endpoint::new(Method::GET, &["api", "health"])
 }
 
+pub fn me() -> Endpoint {
+    Endpoint::new(Method::GET, &["api", "me"])
+}
+
+pub fn printers() -> Endpoint {
+    Endpoint::new(Method::GET, &["api", "printers"])
+}
+
+/// `{method} api/printers/{name}/{rest…}`.
+fn printer_at(method: Method, name: &str, rest: &[&str]) -> Endpoint {
+    let mut segments = vec!["api".to_owned(), "printers".to_owned(), name.to_owned()];
+    segments.extend(rest.iter().map(|s| (*s).to_owned()));
+    Endpoint {
+        method,
+        segments,
+        query: Vec::new(),
+    }
+}
+
+pub fn printer(name: &str) -> Endpoint {
+    printer_at(Method::GET, name, &[])
+}
+
+pub fn printer_info(name: &str) -> Endpoint {
+    printer_at(Method::GET, name, &["info"])
+}
+
+pub fn printer_status(name: &str) -> Endpoint {
+    printer_at(Method::GET, name, &["status"])
+}
+
+pub fn printer_storage(name: &str) -> Endpoint {
+    printer_at(Method::GET, name, &["storage"])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

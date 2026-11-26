@@ -46,7 +46,7 @@ pub enum ApiError {
 }
 
 impl ApiError {
-    fn status(&self) -> StatusCode {
+    pub(crate) fn status(&self) -> StatusCode {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
@@ -64,7 +64,7 @@ impl ApiError {
         }
     }
 
-    fn message(self) -> String {
+    pub(crate) fn message(self) -> String {
         match self {
             Self::BadRequest(m)
             | Self::Unauthorized(m)

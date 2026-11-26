@@ -10,6 +10,7 @@ use axum::Router;
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod mcp;
 pub mod printers;
 pub mod prusalink;
 pub mod routes;
@@ -32,6 +33,7 @@ pub fn router(state: AppState) -> Router {
     // require_auth must stay the outermost auth layer, after every merge (mcp, web).
     routes::router(state.clone())
         .merge(auth::router(state.clone()))
+        .merge(mcp::router(state.clone()))
         .layer(axum::middleware::from_fn_with_state(
             state,
             auth::require_auth,

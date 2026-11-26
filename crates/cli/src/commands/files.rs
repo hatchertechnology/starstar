@@ -9,7 +9,7 @@ use super::printers::check_name;
 use crate::args::FilesCommand;
 use crate::confirm::confirm_here;
 use crate::endpoints::{self, RemotePath};
-use crate::error::CliResult;
+use crate::error::{CliError, CliResult};
 use crate::output::{duration, or_dash};
 
 pub fn kind_label(kind: FileKind) -> &'static str {
@@ -114,7 +114,41 @@ pub fn run(ctx: &Ctx, command: FilesCommand) -> CliResult<()> {
                 || format!("deleted {} on {printer}", path.display()),
             );
         }
-        FilesCommand::Upload { .. } => unreachable!("handled in the upload task"),
+        FilesCommand::Upload {
+            printer,
+            remote,
+            local,
+            overwrite,
+            print,
+        } => {
+            check_name(&printer)?;
+            if !local.is_file() {
+                return Err(CliError::Usage(format!(
+                    "{} is not a file",
+                    local.display()
+                )));
+            }
+            let (mut path, folder) = RemotePath::parse(&remote, true)?;
+            if folder {
+                let name = local.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+                    CliError::Usage(format!("{} has no usable file name", local.display()))
+                })?;
+                path.segments.push(name.to_owned());
+            }
+            // The final path goes through the same rules as any other.
+            let (path, _) = RemotePath::parse(&path.display(), false)?;
+            let bytes = ctx.client()?.upload(
+                &endpoints::file_upload(&printer, &path, overwrite, print),
+                &local,
+            )?;
+            out.emit(
+                &json!({"printer": printer, "storage": path.storage, "path": path.path_display(), "bytes": bytes, "overwrite": overwrite, "print": print}),
+                || {
+                    let started = if print { " and started printing" } else { "" };
+                    format!("uploaded {} ({bytes} bytes) to {printer}{started}", path.display())
+                },
+            );
+        }
     }
     Ok(())
 }

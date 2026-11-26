@@ -1,5 +1,7 @@
 //! Blocking HTTP client for the starstar API.
 
+use std::fs::File;
+use std::path::Path;
 use std::time::Duration;
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
@@ -228,6 +230,28 @@ impl ApiClient {
             false,
         )?;
         Ok(())
+    }
+
+    /// Streams `file` as the request body (`Content-Length` set, nothing
+    /// buffered). Each attempt reopens the file. A token that expires within
+    /// 120 s is refreshed first, and a rejected or interrupted send is retried
+    /// once with a fresh token. Returns the size of the file in bytes.
+    pub fn upload(&self, ep: &Endpoint, file: &Path) -> CliResult<u64> {
+        let len = std::fs::metadata(file)?.len();
+        self.execute(
+            ep,
+            &|rb| {
+                let f = File::open(file)?;
+                let len = f.metadata()?.len();
+                Ok(rb
+                    .timeout(Duration::from_secs(3600))
+                    .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                    .body(reqwest::blocking::Body::sized(f, len)))
+            },
+            120,
+            true,
+        )?;
+        Ok(len)
     }
 
     pub fn head(&self, ep: &Endpoint) -> CliResult<HeaderMap> {

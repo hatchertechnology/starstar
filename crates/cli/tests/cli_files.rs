@@ -166,3 +166,137 @@ fn missing_file_is_404_message() {
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("not found on the printer"));
 }
+
+// ---- upload ----
+
+fn pattern(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 256) as u8).collect()
+}
+
+#[test]
+fn upload_streams_whole_file_with_length() {
+    let fake = FakeApi::start();
+    let h = tempfile::tempdir().unwrap();
+    let data = pattern(3 * 1024 * 1024);
+    let file = h.path().join("big.bgcode");
+    std::fs::write(&file, &data).unwrap();
+    let out = run(tok(&fake, h.path())
+        .args(["files", "upload", "mk4", "usb/"])
+        .arg(&file)
+        .args(["--print", "--json"]));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let puts = fake.find("PUT", "/api/printers/mk4/files/usb/big.bgcode?print=true");
+    assert_eq!(puts.len(), 1);
+    assert_eq!(puts[0].body, data);
+    assert_eq!(puts[0].header("content-length"), Some("3145728"));
+    assert!(puts[0].header("transfer-encoding").is_none());
+    assert_eq!(
+        puts[0].header("content-type"),
+        Some("application/octet-stream")
+    );
+    let v = out.json();
+    assert_eq!(v["bytes"], 3145728);
+    assert_eq!(v["print"], true);
+}
+
+#[test]
+fn upload_to_explicit_path_with_overwrite() {
+    let fake = FakeApi::start();
+    let h = tempfile::tempdir().unwrap();
+    let file = h.path().join("local.bgcode");
+    std::fs::write(&file, b"x").unwrap();
+    let out = run(tok(&fake, h.path())
+        .args(["files", "upload", "mk4", "usb/parts/cube.bgcode"])
+        .arg(&file)
+        .arg("--overwrite"));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(
+        fake.find(
+            "PUT",
+            "/api/printers/mk4/files/usb/parts/cube.bgcode?overwrite=true"
+        )
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn upload_retries_after_refresh() {
+    let fake = FakeApi::start();
+    let h = tempfile::tempdir().unwrap();
+    fake.add_refresh_token("ss_rt_1");
+    write_credentials(
+        h.path(),
+        &fake,
+        stored(&fake, "ss_at_stale", "ss_rt_1", future()),
+    );
+    let data = pattern(200_000);
+    let file = h.path().join("a.bgcode");
+    std::fs::write(&file, &data).unwrap();
+    let out = run(cli(&fake, h.path())
+        .args(["files", "upload", "mk4", "usb"])
+        .arg(&file));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let puts: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "PUT")
+        .collect();
+    assert_eq!(puts.len(), 2);
+    assert_eq!(puts[0].header("authorization"), Some("Bearer ss_at_stale"));
+    assert_eq!(puts[1].header("authorization"), Some("Bearer ss_at_r1"));
+    assert_eq!(puts[1].body, data);
+}
+
+#[test]
+fn upload_refreshes_proactively_when_expiring() {
+    let fake = FakeApi::start();
+    let h = tempfile::tempdir().unwrap();
+    fake.add_refresh_token("ss_rt_1");
+    let soon = starstar_cli::session::now() + 100;
+    write_credentials(h.path(), &fake, stored(&fake, TOKEN, "ss_rt_1", soon));
+    let file = h.path().join("a.bgcode");
+    std::fs::write(&file, b"abc").unwrap();
+    let out = run(cli(&fake, h.path())
+        .args(["files", "upload", "mk4", "usb"])
+        .arg(&file));
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let puts: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "PUT")
+        .collect();
+    assert_eq!(puts.len(), 1);
+    assert_eq!(puts[0].header("authorization"), Some("Bearer ss_at_r1"));
+}
+
+#[test]
+fn upload_missing_local_file_is_usage_error() {
+    let fake = FakeApi::start();
+    let h = tempfile::tempdir().unwrap();
+    let out =
+        run(tok(&fake, h.path()).args(["files", "upload", "mk4", "usb", "/nonexistent/x.bgcode"]));
+    assert_eq!(out.code, 2);
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn upload_too_large_is_reported() {
+    let fake = FakeApi::start();
+    fake.set(
+        "PUT",
+        "/api/printers/mk4/files/usb/a.bgcode",
+        Canned::json(
+            413,
+            json!({"error": "upload is larger than the 512 MB limit"}),
+        ),
+    );
+    let h = tempfile::tempdir().unwrap();
+    let file = h.path().join("a.bgcode");
+    std::fs::write(&file, b"abc").unwrap();
+    let out = run(tok(&fake, h.path())
+        .args(["files", "upload", "mk4", "usb"])
+        .arg(&file));
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("512 MB limit"), "{}", out.stderr);
+}

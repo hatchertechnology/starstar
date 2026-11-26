@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 use starstar_shared::Role;
-use starstar_shared::auth::TokenResponse;
+use starstar_shared::auth::{AppGrant, TokenResponse};
 
 use super::{AuthStore, AuthStoreError};
 use crate::auth::Caller;
@@ -157,6 +157,78 @@ impl AuthStore {
         }
         let role = parse_role(&grant_role)?.min(parse_role(&user_role)?);
         Ok(Some(Caller { username, role }))
+    }
+
+    /// Unexpired grants with client and user names, newest first. `None`
+    /// means every user.
+    pub fn list_grants(&self, user_id: Option<i64>) -> Result<Vec<AppGrant>, AuthStoreError> {
+        let conn = self.db.conn();
+        let mut stmt = conn.prepare(
+            "SELECT g.id, g.client_id, c.name, u.username, g.role, g.resource, g.created_at, g.last_used_at, g.expires_at
+             FROM oauth_grants g
+             JOIN oauth_clients c ON c.id = g.client_id
+             JOIN users u ON u.id = g.user_id
+             WHERE g.expires_at > ?1 AND (?2 IS NULL OR g.user_id = ?2)
+             ORDER BY g.created_at DESC, g.id",
+        )?;
+        let rows = stmt.query_map(params![self.now(), user_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, Option<i64>>(7)?,
+                r.get::<_, i64>(8)?,
+            ))
+        })?;
+        let mut grants = Vec::new();
+        for row in rows {
+            let (
+                id,
+                client_id,
+                client_name,
+                username,
+                role,
+                resource,
+                created_at,
+                last_used_at,
+                expires_at,
+            ) = row?;
+            grants.push(AppGrant {
+                id,
+                client_id,
+                client_name,
+                username,
+                role: parse_role(&role)?,
+                resource,
+                created_at,
+                last_used_at,
+                expires_at,
+            });
+        }
+        Ok(grants)
+    }
+
+    /// Deletes a grant (tokens cascade). With `owner = Some(id)` only a grant
+    /// of that user is deleted. Returns whether a row was deleted.
+    pub fn revoke_grant(&self, grant_id: &str, owner: Option<i64>) -> Result<bool, AuthStoreError> {
+        let n = self.db.conn().execute(
+            "DELETE FROM oauth_grants WHERE id = ?1 AND (?2 IS NULL OR user_id = ?2)",
+            params![grant_id, owner],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Deletes every grant of a user (their tokens cascade).
+    pub fn revoke_user_grants(&self, user_id: i64) -> Result<(), AuthStoreError> {
+        self.db.conn().execute(
+            "DELETE FROM oauth_grants WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        Ok(())
     }
 
     /// Hashes of every stored token. For a test that checks nothing is stored

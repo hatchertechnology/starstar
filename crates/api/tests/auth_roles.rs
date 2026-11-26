@@ -10,7 +10,14 @@ mod common;
 use common::*;
 
 /// (method, path, minimum role) for every auth-owned route under /api.
-const AUTH_ROUTES: &[(&str, &str, Role)] = &[("GET", "/api/me", Role::Viewer)];
+const AUTH_ROUTES: &[(&str, &str, Role)] = &[
+    ("GET", "/api/me", Role::Viewer),
+    ("PUT", "/api/me/password", Role::Viewer),
+    ("GET", "/api/users", Role::Admin),
+    ("POST", "/api/users", Role::Admin),
+    ("PATCH", "/api/users/someone", Role::Admin),
+    ("DELETE", "/api/users/someone", Role::Admin),
+];
 
 /// Every /api and /mcp path served today, plus paths no route matches. The
 /// integrator adds the printer routes from tests/roles.rs.

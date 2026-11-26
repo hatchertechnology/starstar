@@ -31,7 +31,7 @@ real printer is driven in this round.**
 5. A Nuxt web UI (designed with the impeccable skill) for sign-in, first-admin
    setup, consent, user and app management, and a basic printer dashboard.
 6. A skill for the CLI in this repo that installs with
-   `npx skills add kerryhatcher/starstar`.
+   `npx skills add hatchertechnology/starstar`.
 7. A ~12 mm calibration cube modelled with CadQuery and sliced for MK4 and
    MINI, ready for the first real print.
 

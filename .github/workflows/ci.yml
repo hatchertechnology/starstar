@@ -1,0 +1,92 @@
+name: CI & SonarQube Cloud
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Build, Test, and Analyze
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: starstar
+          POSTGRES_PASSWORD: starstar-ci
+          POSTGRES_DB: starstar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U starstar -d starstar"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CARGO_TERM_COLOR: always
+      CI: 1
+      NUXT_TELEMETRY_DISABLED: 1
+      STARSTAR_TEST_DATABASE_URL: postgres://starstar:starstar-ci@127.0.0.1:5432/starstar
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Rust format check
+        run: cargo fmt --check
+
+      - name: Rust Clippy report
+        run: cargo clippy --workspace --all-targets --message-format=json > clippy-report.json
+
+      - name: Rust tests and coverage
+        run: cargo llvm-cov --workspace --lcov --output-path target/llvm-cov.lcov
+
+      - name: Web install, typecheck, and coverage
+        run: |
+          npm --prefix web ci
+          npm --prefix web run typecheck
+          npm --prefix web run test:coverage
+          sed -i 's|^SF:app/|SF:web/app/|' web/coverage/lcov.info
+
+      - name: Notice if SONAR_TOKEN is not configured
+        if: ${{ secrets.SONAR_TOKEN == '' }}
+        run: echo "::warning::SONAR_TOKEN secret is not set; skipping SonarQube Cloud scan"
+
+      - name: SonarQube Cloud scan
+        if: ${{ secrets.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

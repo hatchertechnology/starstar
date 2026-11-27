@@ -371,3 +371,86 @@ async fn migration_v4_creates_parts_tables() {
         Some("23514")
     );
 }
+
+#[tokio::test]
+async fn parts_reject_cross_part_references() {
+    let schema = TestSchema::create().await;
+    let db = schema.connect().await.unwrap();
+    let pool = db.pool();
+    let a: i64 = sqlx::query_scalar(
+        "INSERT INTO parts (name, created_by, created_at) VALUES ('A', 'test', 0) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let b: i64 = sqlx::query_scalar(
+        "INSERT INTO parts (name, created_by, created_at) VALUES ('B', 'test', 0) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let model: i64 = sqlx::query_scalar("INSERT INTO model_revisions (part_id, number, created_by, created_at) VALUES ($1, 1, 'test', 0) RETURNING id").bind(a).fetch_one(pool).await.unwrap();
+    let setup_a: i64 = sqlx::query_scalar("INSERT INTO setups (part_id, name, created_by, created_at) VALUES ($1, 'setup', 'test', 0) RETURNING id").bind(a).fetch_one(pool).await.unwrap();
+    let setup_b: i64 = sqlx::query_scalar("INSERT INTO setups (part_id, name, created_by, created_at) VALUES ($1, 'setup', 'test', 0) RETURNING id").bind(b).fetch_one(pool).await.unwrap();
+    let setup_rev: i64 = sqlx::query_scalar("INSERT INTO setup_revisions (part_id, setup_id, number, model_revision_id, created_by, created_at) VALUES ($1, $2, 1, $3, 'test', 0) RETURNING id").bind(a).bind(setup_a).bind(model).fetch_one(pool).await.unwrap();
+    for query in [
+        sqlx::query("UPDATE parts SET default_setup_id=$1 WHERE id=$2").bind(setup_a).bind(b),
+        sqlx::query("INSERT INTO setup_revisions (part_id, setup_id, number, model_revision_id, created_by, created_at) VALUES ($1, $2, 1, $3, 'test', 0)").bind(b).bind(setup_b).bind(model),
+        sqlx::query("INSERT INTO setup_revisions (part_id, setup_id, number, model_revision_id, created_by, created_at) VALUES ($1, $2, 2, $3, 'test', 0)").bind(b).bind(setup_a).bind(model),
+        sqlx::query("INSERT INTO part_files (part_id, model_revision_id, role, name, sha256, size, kind, parsed, has_preview, uploaded_by, uploaded_at) VALUES ($1, $2, 'render', 'x', 'x', 0, 'png', false, false, 'test', 0)").bind(b).bind(model),
+        sqlx::query("INSERT INTO part_files (part_id, setup_revision_id, role, name, sha256, size, kind, parsed, has_preview, uploaded_by, uploaded_at) VALUES ($1, $2, 'slice', 'x', 'x', 0, 'gcode', false, false, 'test', 0)").bind(b).bind(setup_rev),
+    ] {
+        let err = query.execute(pool).await.unwrap_err();
+        assert_eq!(err.as_database_error().unwrap().code().as_deref(), Some("23503"));
+    }
+}
+
+#[tokio::test]
+async fn parts_deletion_preserves_revision_and_slice_integrity() {
+    let schema = TestSchema::create().await;
+    let db = schema.connect().await.unwrap();
+    let pool = db.pool();
+    let part: i64 = sqlx::query_scalar(
+        "INSERT INTO parts (name, created_by, created_at) VALUES ('part', 'test', 0) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let model: i64 = sqlx::query_scalar("INSERT INTO model_revisions (part_id, number, created_by, created_at) VALUES ($1, 1, 'test', 0) RETURNING id").bind(part).fetch_one(pool).await.unwrap();
+    let setup: i64 = sqlx::query_scalar("INSERT INTO setups (part_id, name, created_by, created_at) VALUES ($1, 'setup', 'test', 0) RETURNING id").bind(part).fetch_one(pool).await.unwrap();
+    sqlx::query("UPDATE parts SET default_setup_id=$1 WHERE id=$2")
+        .bind(setup)
+        .bind(part)
+        .execute(pool)
+        .await
+        .unwrap();
+    let revision: i64 = sqlx::query_scalar("INSERT INTO setup_revisions (part_id, setup_id, number, model_revision_id, created_by, created_at) VALUES ($1, $2, 1, $3, 'test', 0) RETURNING id").bind(part).bind(setup).bind(model).fetch_one(pool).await.unwrap();
+    let current: i64 = sqlx::query_scalar("INSERT INTO part_files (part_id, setup_revision_id, role, name, sha256, size, kind, parsed, has_preview, uploaded_by, uploaded_at) VALUES ($1, $2, 'slice', 'current', 'x', 0, 'gcode', false, false, 'test', 0) RETURNING id").bind(part).bind(revision).fetch_one(pool).await.unwrap();
+    sqlx::query("INSERT INTO part_files (part_id, setup_revision_id, role, name, sha256, size, kind, parsed, has_preview, uploaded_by, uploaded_at, superseded_by) VALUES ($1, $2, 'slice', 'old', 'y', 0, 'gcode', false, false, 'test', 0, $3)").bind(part).bind(revision).bind(current).execute(pool).await.unwrap();
+    for query in [
+        sqlx::query("DELETE FROM part_files WHERE id=$1").bind(current),
+        sqlx::query("DELETE FROM model_revisions WHERE id=$1").bind(model),
+    ] {
+        let err = query.execute(pool).await.unwrap_err();
+        assert_eq!(
+            err.as_database_error().unwrap().code().as_deref(),
+            Some("23503")
+        );
+    }
+    sqlx::query("DELETE FROM setups WHERE id=$1")
+        .bind(setup)
+        .execute(pool)
+        .await
+        .unwrap();
+    let default: Option<i64> = sqlx::query_scalar("SELECT default_setup_id FROM parts WHERE id=$1")
+        .bind(part)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(default, None);
+    sqlx::query("DELETE FROM parts WHERE id=$1")
+        .bind(part)
+        .execute(pool)
+        .await
+        .unwrap();
+}

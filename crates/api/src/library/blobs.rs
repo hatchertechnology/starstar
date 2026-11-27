@@ -271,7 +271,14 @@ impl Blobs {
         Ok(())
     }
 }
+const MAX_PREVIEW_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+fn preview_source_allowed(size: u64) -> bool {
+    size <= MAX_PREVIEW_SOURCE_BYTES
+}
 fn image_preview(path: &Path) -> Option<Vec<u8>> {
+    if !preview_source_allowed(std::fs::metadata(path).ok()?.len()) {
+        return None;
+    }
     let mut reader = image::ImageReader::open(path)
         .ok()?
         .with_guessed_format()
@@ -290,7 +297,7 @@ fn image_preview(path: &Path) -> Option<Vec<u8>> {
 fn threemf_preview(path: &Path) -> Option<Vec<u8>> {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(path).ok()?).ok()?;
     let file = zip.by_name("Metadata/thumbnail.png").ok()?;
-    if file.size() > 16 * 1024 * 1024 {
+    if !preview_source_allowed(file.size()) || file.size() > 16 * 1024 * 1024 {
         return None;
     }
     let mut bytes = Vec::new();
@@ -382,6 +389,11 @@ mod tests {
             .write_to(&mut bytes, image::ImageFormat::Png)
             .unwrap();
         bytes.into_inner()
+    }
+    #[test]
+    fn preview_source_size_bound() {
+        assert!(preview_source_allowed(64 * 1024 * 1024));
+        assert!(!preview_source_allowed(64 * 1024 * 1024 + 1));
     }
     #[tokio::test]
     async fn image_preview_is_png() {

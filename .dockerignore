@@ -5,6 +5,11 @@
 !Cargo.lock
 !LICENSE
 !crates/
+# Workspace members only; add a new crate here.
+crates/*
+!crates/api/
+!crates/cli/
+!crates/shared/
 crates/*/*
 !crates/*/Cargo.toml
 !crates/*/src/

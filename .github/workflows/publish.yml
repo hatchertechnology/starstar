@@ -1,0 +1,151 @@
+name: Publish container image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# At most one publish per ref runs at a time; a running publish is never cancelled.
+# GitHub keeps only the newest *pending* run per group, so a pending run can be replaced
+# by a newer one for the same ref. On main the newer commit contains the older one.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/hatchertechnology/starstar
+
+jobs:
+  publish:
+    name: Build, smoke test and tag on GHCR
+    # Guard against accidental dispatch from a branch. It is not a security boundary:
+    # anyone with write access can change this file on their branch. Thor deploys only
+    # digests from main runs (deploy gate, plan §7 step 12).
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: starstar
+          POSTGRES_PASSWORD: smoke-${{ github.run_id }}
+          POSTGRES_DB: starstar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U starstar -d starstar"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=starstar
+            org.opencontainers.image.licenses=AGPL-3.0-only
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=starstar-image
+          cache-to: type=gha,scope=starstar-image,mode=max
+
+      - name: Smoke test the pushed digest
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          DB_URL: postgres://starstar:smoke-${{ github.run_id }}@127.0.0.1:5432/starstar
+        run: |
+          docker pull "$REF"
+          scripts/container-smoke.sh "$REF" "$DB_URL"
+
+      - name: Tag the tested digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r t; do [ -n "$t" ] && args+=(-t "$t"); done <<<"$TAGS"
+          docker buildx imagetools create "${args[@]}" "${IMAGE}@${DIGEST}"
+          # Every tag must resolve to exactly the tested digest.
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            got=$(docker buildx imagetools inspect "$t" --format '{{json .Manifest}}' | jq -r .digest)
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$t resolves to $got, expected $DIGEST"
+              exit 1
+            fi
+          done <<<"$TAGS"
+
+      - name: Record digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Machine-readable lines for the deploy gate (read with `gh run view --log`).
+          echo "published-commit=${GITHUB_SHA}"
+          echo "published-ref=${GITHUB_REF}"
+          echo "published-digest=${IMAGE}@${DIGEST}"
+          {
+            echo "### Published image (smoke-tested)"
+            echo
+            echo "Commit \`${GITHUB_SHA}\` on \`${GITHUB_REF}\`."
+            echo
+            echo "Deploy identity — pin this digest in \`deploy/thor/kustomization.yaml\` (\`images:\` → \`digest:\`):"
+            echo
+            echo "\`${IMAGE}@${DIGEST}\`"
+            echo
+            echo "Mutable tags now pointing at it:"
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

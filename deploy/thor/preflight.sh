@@ -2,7 +2,7 @@
 # Fail-closed gate before every apply of deploy/thor (first deploy and upgrades).
 #
 #   set -o pipefail
-#   deploy/thor/preflight.sh thor [verified-rollback-image] | tee "preflight-$(date +%Y%m%d-%H%M%S).log"
+#   deploy/thor/preflight.sh thor [verified-rollback-image|--first-deploy-retry] | tee "preflight-$(date +%Y%m%d-%H%M%S).log"
 #
 # Exits non-zero, and prints "PREFLIGHT FAILED: ..." on stderr, unless:
 #   1. the first argument is the kube context "thor";
@@ -17,7 +17,7 @@ set -euo pipefail
 
 fail() { echo "PREFLIGHT FAILED: $*" >&2; exit 1; }
 
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] || fail "usage: $0 thor [verified-rollback-image]"
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || fail "usage: $0 thor [verified-rollback-image|--first-deploy-retry]"
 CTX=$1
 [ "$CTX" = thor ] || fail "context must be 'thor', got '$CTX'"
 
@@ -82,12 +82,16 @@ if [ -n "$DEPLOY" ]; then
       && [ "${ROLLBACK#*@}" != "$ZERO" ] || fail "Ready pod has an invalid pinned image"
     echo "rollback source: Ready pod spec"
   elif [ "$#" -eq 2 ]; then
-    ROLLBACK=$2
-    [[ $ROLLBACK =~ ^ghcr\.io/hatchertechnology/starstar@sha256:[0-9a-f]{64}$ ]] \
-      && [ "${ROLLBACK#*@}" != "$ZERO" ] || fail "invalid verified rollback image"
-    echo "rollback source: previous verified deployment record"
+    if [ "$2" = --first-deploy-retry ]; then
+      echo "first-deploy retry explicitly requested; confirm this Deployment has never had a Ready pod"
+    else
+      ROLLBACK=$2
+      [[ $ROLLBACK =~ ^ghcr\.io/hatchertechnology/starstar@sha256:[0-9a-f]{64}$ ]] \
+        && [ "${ROLLBACK#*@}" != "$ZERO" ] || fail "invalid verified rollback image"
+      echo "rollback source: previous verified deployment record"
+    fi
   else
-    echo "first-deploy retry: no Ready pod or rollback record; confirm this Deployment has never had a Ready pod"
+    fail "no Ready API pod; supply a verified rollback image or --first-deploy-retry after confirming deploy history"
   fi
 fi
 

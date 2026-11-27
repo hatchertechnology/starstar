@@ -2,7 +2,7 @@
 # Run from any directory; every gate must pass before the next stage.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] && [ "$1" = thor ] || { echo "usage: $0 thor [verified-rollback-image]" >&2; exit 1; }
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] && [ "$1" = thor ] || { echo "usage: $0 thor [verified-rollback-image|--first-deploy-retry]" >&2; exit 1; }
 deploy/thor/preflight.sh "$@"
 kubectl --context thor apply -f deploy/thor/namespace.yaml
 kubectl --context thor apply -f deploy/thor/networkpolicy.yaml

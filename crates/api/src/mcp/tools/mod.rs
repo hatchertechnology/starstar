@@ -8,10 +8,12 @@ use super::StarstarMcp;
 mod cameras;
 mod files;
 mod jobs;
+mod parts;
 mod printers;
 
 pub(crate) fn all_tools() -> ToolRouter<StarstarMcp> {
-    StarstarMcp::printer_tools()
+    StarstarMcp::part_tools()
+        + StarstarMcp::printer_tools()
         + StarstarMcp::job_tools()
         + StarstarMcp::file_tools()
         + StarstarMcp::camera_tools()

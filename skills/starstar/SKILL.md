@@ -101,6 +101,10 @@ The OAuth sign-in happens in the browser; tools are listed per role. See [refere
 
 Every command and flag: [references/commands.md](references/commands.md).
 
-## Parts library
+## Parts
 
-The flat library API (`/api/library`) and the `library_list` / `library_info` MCP tools have been retired in favor of the parts library HTTP API (`/api/parts`, `/api/setups`, `/api/files`, `/api/parts/{id}/match`). Use `starstar part` to manage parts and their files. The MCP (`part_*`) interface is not implemented yet. To print, use `starstar files upload` / `starstar files print` (or MCP `upload_file` / `start_print`).
+A part has model revisions for its design files. Each part can have setups (plates), each with setup revisions built from a model revision; setup revisions contain slices. Use `part_list` to search, `part_info` for the whole tree, and `part_match` to check registered printers. Upload parts and files through the CLI or web only.
+
+Matching uses the chosen setup, or the part's default, and its latest setup revision. If that revision is behind the latest model revision, automatic matching is blocked until a new setup revision is created. Otherwise matching selects a current slice for the printer family, nozzle and selected profile (or the setup's default profile). When no default profile exists and multiple profiles are available, choose a profile. A printer with no matching slice is blocked.
+
+Use `starstar part` to manage parts and files. To print, use `starstar files upload` / `starstar files print` (or MCP `upload_file` / `start_print`).

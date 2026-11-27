@@ -250,6 +250,8 @@ fn names(list: &[&str]) -> std::collections::BTreeSet<String> {
 }
 
 const VIEWER_TOOLS: &[&str] = &[
+    "part_list",
+    "part_info",
     "list_printers",
     "get_printer",
     "printer_info",
@@ -264,6 +266,7 @@ const VIEWER_TOOLS: &[&str] = &[
     "camera_snapshot",
 ];
 const OPERATOR_TOOLS: &[&str] = &[
+    "part_match",
     "pause_job",
     "resume_job",
     "continue_job",
@@ -308,7 +311,8 @@ async fn tools_list_per_role() {
     assert_eq!(listed(Role::Operator).await, names(&operator));
     let all = listed(Role::Admin).await;
     assert_eq!(all, names(&admin));
-    assert_eq!(all.len(), 32);
+    assert_eq!(all.len(), 35);
+    assert!(all.iter().all(|name| !name.starts_with("library_")));
 
     let t = token(&api, Role::Operator).await;
     let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;
@@ -338,6 +342,7 @@ async fn every_tool_rejects_the_role_below_it() {
         let f = json!({"storage": "usb", "path": "a.bgcode"});
         let cam = json!({"id": "cam1"});
         vec![
+            ("part_match", json!({"id": 1}), Role::Viewer),
             ("pause_job", p(json!({"id": 42})), Role::Viewer),
             ("resume_job", p(json!({"id": 42})), Role::Viewer),
             ("continue_job", p(json!({"id": 42})), Role::Viewer),

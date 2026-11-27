@@ -8,6 +8,8 @@ use crate::printers::{cameras, files, jobs, registry, telemetry, transfer, updat
 
 pub(crate) fn tool_role(name: &str) -> Option<Role> {
     Some(match name {
+        "part_list" | "part_info" => crate::library::READ_PARTS_ROLE,
+        "part_match" => crate::library::EDIT_PARTS_ROLE,
         "list_printers" => registry::LIST_PRINTERS_ROLE,
         "get_printer" => registry::SHOW_PRINTER_ROLE,
         "printer_info" => telemetry::PRINTER_INFO_ROLE,
@@ -46,6 +48,9 @@ pub(crate) fn tool_role(name: &str) -> Option<Role> {
 
 #[cfg(test)]
 pub(crate) const TOOL_NAMES: &[&str] = &[
+    "part_list",
+    "part_info",
+    "part_match",
     "list_printers",
     "get_printer",
     "register_printer",
@@ -96,7 +101,7 @@ mod tests {
             .collect();
         let named: BTreeSet<String> = TOOL_NAMES.iter().map(|n| (*n).to_owned()).collect();
         assert_eq!(routed, named);
-        assert_eq!(TOOL_NAMES.len(), 32);
+        assert_eq!(TOOL_NAMES.len(), 35);
         for name in TOOL_NAMES {
             assert!(tool_role(name).is_some(), "{name} has no role");
         }
@@ -105,6 +110,9 @@ mod tests {
 
     /// (name, read_only, destructive, idempotent) copied from the plan's tool table.
     const ANNOTATIONS: &[(&str, bool, bool, Option<bool>)] = &[
+        ("part_list", true, false, None),
+        ("part_info", true, false, None),
+        ("part_match", true, false, None),
         ("list_printers", true, false, None),
         ("get_printer", true, false, None),
         ("register_printer", false, false, None),

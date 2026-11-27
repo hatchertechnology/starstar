@@ -11,7 +11,7 @@ use crate::error::ApiError;
 
 mod cameras;
 mod files;
-mod parts;
+pub(crate) mod parts;
 mod printers;
 
 pub fn router(state: AppState) -> Router {

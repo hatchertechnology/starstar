@@ -439,12 +439,23 @@ async fn matches(
     Path(id): Path<i64>,
     Query(q): Query<MatchQuery>,
 ) -> Result<Json<Vec<PrinterMatch>>, ApiError> {
+    Ok(Json(
+        match_for_part(&s, id, q.setup, q.profile.as_deref()).await?,
+    ))
+}
+
+pub(crate) async fn match_for_part(
+    s: &AppState,
+    id: i64,
+    setup: Option<i64>,
+    profile: Option<&str>,
+) -> Result<Vec<PrinterMatch>, ApiError> {
     let part = s.parts.get_part(id).await?;
     let printers = s.store.list().await?;
     let results = join_all(
         printers
             .iter()
-            .map(|p| async { crate::printers::client(&s, p).info().await }),
+            .map(|p| async { crate::printers::client(s, p).info().await }),
     )
     .await;
     let inputs: Vec<_> = printers
@@ -456,12 +467,12 @@ async fn matches(
             nozzle: r.as_ref().ok().and_then(|x| x.nozzle_diameter),
         })
         .collect();
-    let mut matches = match_printers(&part, q.setup, q.profile.as_deref(), &inputs)?;
+    let mut matches = match_printers(&part, setup, profile, &inputs)?;
     for (m, r) in matches.iter_mut().zip(results) {
         if r.is_err() {
             m.blocked = Some("printer unreachable".into());
             m.slice = None;
         }
     }
-    Ok(Json(matches))
+    Ok(matches)
 }

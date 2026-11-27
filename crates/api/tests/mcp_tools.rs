@@ -558,3 +558,70 @@ async fn register_printer_never_echoes_password() {
     let res = call_tool(&api, &t, "get_printer", json!({"printer": "mini"})).await;
     assert_eq!(res["structuredContent"]["status"], 404);
 }
+
+#[tokio::test]
+async fn part_info_returns_the_complete_tree() {
+    let api = TestApi::start().await;
+    let part = api
+        .state
+        .parts
+        .create_part("Widget", None, "tester")
+        .await
+        .unwrap();
+    api.state
+        .parts
+        .create_setup(part.id, "Plate", "tester")
+        .await
+        .unwrap();
+    let t = token(&api, Role::Viewer).await;
+    let res = call_tool(&api, &t, "part_info", json!({"id": part.id})).await;
+    assert_eq!(res["isError"], false, "{res}");
+    assert_eq!(res["structuredContent"]["part"]["name"], "Widget");
+    assert_eq!(
+        res["structuredContent"]["part"]["model_revisions"][0]["number"],
+        1
+    );
+    assert_eq!(
+        res["structuredContent"]["part"]["setups"][0]["name"],
+        "Plate"
+    );
+}
+
+#[tokio::test]
+async fn parts_list_and_match_follow_library_rules() {
+    let api = TestApi::start().await;
+    let part = api
+        .state
+        .parts
+        .create_part("Widget", None, "tester")
+        .await
+        .unwrap();
+    let setup = api
+        .state
+        .parts
+        .create_setup(part.id, "Plate", "tester")
+        .await
+        .unwrap();
+    let viewer = token(&api, Role::Viewer).await;
+    let listed = call_tool(
+        &api,
+        &viewer,
+        "part_list",
+        json!({"query": "wid", "sort": "name"}),
+    )
+    .await;
+    assert_eq!(listed["structuredContent"]["parts"][0]["id"], part.id);
+    let missing = call_tool(&api, &viewer, "part_info", json!({"id": -1})).await;
+    assert_eq!(missing["structuredContent"]["status"], 404);
+    let operator = token(&api, Role::Operator).await;
+    let result = call_tool(
+        &api,
+        &operator,
+        "part_match",
+        json!({"id": part.id, "setup_id": setup.id}),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(result["structuredContent"]["matches"][0]["printer"], "mk4");
+    assert!(result["structuredContent"]["matches"][0]["blocked"].is_string());
+}

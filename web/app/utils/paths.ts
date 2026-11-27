@@ -1,3 +1,5 @@
+import type { LocationQuery } from 'vue-router'
+
 const enc = encodeURIComponent
 
 /** `/api/printers/<name>/<rest…>`, each segment percent-encoded. */
@@ -14,4 +16,27 @@ export function filePath(name: string, storage: string, segments: string[], suff
 
 export function splitPath(path: string): string[] {
   return path.split('/').filter(Boolean)
+}
+
+/** API path of a file's preview image. */
+export function thumbnailPath(name: string, storage: string, segments: string[]): string {
+  return ['/api/printers', enc(name), 'thumbnails', enc(storage), ...segments.map(enc)].join('/')
+}
+
+/** UI route of a print file's details page. */
+export function fileDetailsRoute(name: string, storage: string, segments: string[]): string {
+  return ['/printers', enc(name), 'files', enc(storage), ...segments.map(enc)].join('/')
+}
+
+/** Query that reopens a folder in the file browser. */
+export function folderQuery(storage: string, segments: string[]): { storage: string; dir?: string } {
+  return segments.length ? { storage, dir: segments.join('/') } : { storage }
+}
+
+/** Reads a folder back from the query written by `folderQuery`. */
+export function parseFolderQuery(q: LocationQuery): { storage?: string; segments: string[] } {
+  const one = (v: LocationQuery[string] | undefined) => (Array.isArray(v) ? v[0] : v) ?? undefined
+  const storage = one(q.storage)
+  const dir = one(q.dir)
+  return { storage: storage || undefined, segments: dir ? splitPath(dir) : [] }
 }

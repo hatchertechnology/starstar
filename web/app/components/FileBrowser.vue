@@ -2,11 +2,13 @@
 import type { FileEntry, Role, StorageDevice } from '~/types/api'
 import { errorMessage } from '~/utils/api'
 import { formatBytes, formatDate, formatDuration } from '~/utils/format'
-import { filePath, printerPath } from '~/utils/paths'
+import { fileDetailsRoute, filePath, folderQuery, parseFolderQuery, printerPath } from '~/utils/paths'
 import { roleAtLeast } from '~/utils/roles'
 
 const props = defineProps<{ printer: string; role: Role; printerState: string }>()
 const api = useApi()
+const route = useRoute()
+const router = useRouter()
 
 const storages = ref<StorageDevice[]>([])
 const storage = ref<string | null>(null)
@@ -38,6 +40,9 @@ const running = computed(() => ['PRINTING', 'PAUSED', 'ATTENTION', 'BUSY'].inclu
 
 async function load() {
   if (!storage.value) return
+  // Keep the folder in the URL so Back from a file's page reopens it.
+  const { dir: _dir, ...rest } = route.query
+  void router.replace({ query: { ...rest, ...folderQuery(storage.value, segments.value) } })
   loading.value = true
   error.value = null
   try {
@@ -58,7 +63,10 @@ async function init() {
       loading.value = false
       return
     }
-    storage.value = storageId(first)
+    const wanted = parseFolderQuery(route.query)
+    const fromQuery = wanted.storage ? available.value.find((s) => storageId(s) === wanted.storage) : undefined
+    storage.value = storageId(fromQuery ?? first)
+    if (fromQuery) segments.value = wanted.segments
     await load()
   } catch (e) {
     error.value = errorMessage(e)
@@ -145,6 +153,7 @@ const dialog = computed(() => {
           <tr v-for="e in rows" :key="e.name">
             <th scope="row" class="name">
               <button v-if="e.kind === 'folder'" type="button" class="link" @click="open(e.name)">{{ shown(e) }}</button>
+              <NuxtLink v-else-if="e.kind === 'print_file' && storage" :to="fileDetailsRoute(printer, storage, [...segments, e.name])">{{ shown(e) }}</NuxtLink>
               <template v-else>{{ shown(e) }}</template>
             </th>
             <td>{{ e.kind === 'folder' ? 'Folder' : e.kind === 'print_file' ? 'Print file' : e.kind === 'firmware' ? 'Firmware' : 'File' }}</td>

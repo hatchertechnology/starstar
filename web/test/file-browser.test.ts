@@ -99,4 +99,25 @@ describe('FileBrowser', () => {
     expect(w.text()).toContain('printer unreachable')
     w.unmount()
   })
+  it('print files link to their details page; folders stay buttons', async () => {
+    stubFetch(routes())
+    const w = await mount()
+    const link = w.find('tbody a[href="/printers/mk4/files/usb/zebra.bgcode"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toBe('zebra.bgcode')
+    expect(w.findAll('tbody a').map((a) => a.text())).not.toContain('My Parts')
+    await w.findAll('button').find((b) => b.text() === 'My Parts')!.trigger('click')
+    await flush()
+    expect(w.find('tbody a').attributes('href')).toBe('/printers/mk4/files/usb/My%20Parts/caf%C3%A9%20%231%3F%25.bgcode')
+    w.unmount()
+  })
+
+  it('opens the folder named in the query', async () => {
+    stubFetch(routes())
+    const w = await mountSuspended(FileBrowser, { props: { printer: 'mk4', role: 'admin', printerState: 'IDLE' }, route: '/printers/mk4?storage=usb&dir=My%20Parts', attachTo: document.body })
+    await flush()
+    expect(rowNames(w)).toEqual(['café #1?%.bgcode'])
+    w.unmount()
+  })
 })
+

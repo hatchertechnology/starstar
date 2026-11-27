@@ -368,6 +368,16 @@ PG=$(kss get pod -l cnpg.io/cluster="$CLUSTER",cnpg.io/instanceRole=primary -o j
 
 Compare counts and application data with the source at the dump's point in time; concurrent writes can change counts. Only then consider the dump verified. Drop `starstar_dump_test` after inspection; on failure investigate and clean up explicitly. A restore reads the archive payload, unlike `pg_restore --list`. Keep the encrypted dump off-node.
 
+**Without an encrypted volume:** encrypt the dump with age while it is written, and decrypt it into `pg_restore` for the test restore. `R` is your age public key.
+
+```sh
+(umask 077; set -o noclobber; set -o pipefail; kss exec "$PG" -c postgres -- pg_dump -Fc -d starstar | age -r "$R" > "$F.age") \
+  && kss exec "$PG" -c postgres -- createdb -O starstar starstar_dump_test \
+  && age -d -i ~/.config/sops/age/keys.txt "$F.age" | kss exec -i "$PG" -c postgres -- pg_restore --no-owner --role=starstar --exit-on-error -d starstar_dump_test
+```
+
+The v4 (parts library) upgrade on 2026-11-27 used this method before the migration.
+
 ### Restore a manual dump into a fresh database
 
 This procedure restores into a fresh database in the existing `starstar-pg` Cluster. Choose a compatible image digest, set it in `kustomization.yaml`, and run preflight, preserving the rollback record. If no API pod is Ready, pass the full verified image from the previous rollback record: `deploy/thor/preflight.sh thor "$ROLLBACK"`, with `ROLLBACK` set to that image. Do not use the failed Deployment template as the record. Scale the API to zero and wait for all API pods to terminate. Keep it at zero during the restore. Resolve `PG` as above. Restore into a new `starstar_restore` database using the `createdb` and `pg_restore --exit-on-error` commands above, substituting `starstar_restore` and the selected encrypted dump. Compare counts and schema against the expected backup and check errors. Do not overwrite an existing recovery database.

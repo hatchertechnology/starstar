@@ -40,7 +40,7 @@ async function create() {
 <template>
   <section>
     <div class="heading"><h1>Library</h1><button v-if="session.can('operator') && !showNew" class="btn btn-primary" type="button" @click="showNew = true">New part</button></div>
-    <form v-if="session.can('operator') && showNew" class="new-part" @submit.prevent="create"><label>Name <input v-model="name" name="name" required></label><button class="btn btn-primary" type="submit" :disabled="creating || !name.trim()">{{ creating ? 'Creating…' : 'Create' }}</button><button class="btn btn-secondary" type="button" @click="showNew = false; createError = null">Cancel</button></form>
+    <form v-if="session.can('operator') && showNew" class="new-part" @submit.prevent="create"><label>Name <input v-model="name" name="name" :disabled="creating" required></label><button class="btn btn-primary" type="submit" :disabled="creating || !name.trim()">{{ creating ? 'Creating…' : 'Create' }}</button><button class="btn btn-secondary" type="button" :disabled="creating" @click="showNew = false; createError = null">Cancel</button></form>
     <Notice v-if="listError" kind="error">{{ listError }}</Notice>
     <Notice v-if="createError" kind="error">{{ createError }}</Notice>
     <div class="filters"><label>Search <input v-model="search" type="search"></label><label>Sort <select v-model="sort"><option value="newest">Newest</option><option value="name">Name</option></select></label></div>

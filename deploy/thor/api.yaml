@@ -129,7 +129,7 @@ spec:
       volumes:
         - name: library
           persistentVolumeClaim:
-            claimName: starstar-library
+            claimName: starstar-print-library
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi

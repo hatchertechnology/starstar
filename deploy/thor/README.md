@@ -8,7 +8,7 @@ These manifests run Starstar on the Thor k3s cluster, reachable only on the tail
 | `namespace.yaml` | Namespace `starstar`, Pod Security `restricted` (enforce, audit, warn) |
 | `networkpolicy.yaml` | `starstar-default-deny`, `starstar-api`, `starstar-postgres` |
 | `database.yaml` | CloudNativePG Cluster `starstar-pg` (PostgreSQL 17.11, 1 instance, `local-path` 10Gi, TLS-only) |
-| `library-volume.yaml` | Retained 100Gi local PV and PVC `starstar-library` on Thor |
+| `library-volume.yaml` | Retained 100Gi local PV and PVC `starstar-print-library` on Thor |
 | `api.yaml` | ServiceAccount `starstar-api` (no token), Deployment `starstar-api` (1 replica, Recreate), Service `starstar:8080` |
 | `ingress.yaml` | Tailscale Ingress `starstar` (TLS by the Tailscale operator, tailnet only) |
 | `kustomization.yaml` | Namespace, common label and the **image digest** |
@@ -44,14 +44,14 @@ Run all commands from the repository root. Keep the terminal output: it is the d
 Prepare the library directory once as root on Thor before applying the manifests. Check `zfs list hatch1/services` first. If it is a ZFS dataset, create the child dataset:
 
 ```sh
-zfs create -p -o mountpoint=/hatch1/services/starstar/library hatch1/services/starstar/library
+zfs create -p -o mountpoint=/hatch1/services/starstar/print-library hatch1/services/starstar/print-library
 ```
 
-If `hatch1/services` is a plain directory instead, use `mkdir -p /hatch1/services/starstar/library`. Then, in either case:
+If `hatch1/services` is a plain directory instead, use `mkdir -p /hatch1/services/starstar/print-library`. Then, in either case:
 
 ```sh
-chown 10001:10001 /hatch1/services/starstar/library
-chmod 0750 /hatch1/services/starstar/library
+chown 10001:10001 /hatch1/services/starstar/print-library
+chmod 0750 /hatch1/services/starstar/print-library
 ```
 
 The API mounts the PVC at `/var/lib/starstar/library`. The PV has reclaim policy `Retain`: deleting the PVC does not delete its files. Backups are planned for phase 3 and are not yet configured.
@@ -345,7 +345,7 @@ Expect a short outage. In-flight printer uploads are cut at the 60 s grace perio
 
 ## Backups (not yet configured)
 
-**What exists:** one copy of the database on the CNPG PVC under `/hatch1/k3s/storage/pvc-<uid>_starstar_starstar-pg-1`, and one copy of library files at `/hatch1/services/starstar/library`, on Thor's ZFS pool. There are no WAL archives (`archive_mode` is on, but nothing is configured to receive the WAL) and no `ScheduledBackup`.
+**What exists:** one copy of the database on the CNPG PVC under `/hatch1/k3s/storage/pvc-<uid>_starstar_starstar-pg-1`, and one copy of library files at `/hatch1/services/starstar/print-library`, on Thor's ZFS pool. There are no WAL archives (`archive_mode` is on, but nothing is configured to receive the WAL) and no `ScheduledBackup`.
 
 **What is missing:** any off-node backup. Losing Thor's disk can lose the database and library; deleting the Cluster or namespace or a bad migration can lose database records. The manual database dump does not include library files.
 

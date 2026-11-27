@@ -34,11 +34,16 @@ RENDERED=$(kubectl kustomize "$DIR") || fail "kustomize render failed"
 
 printf '%s\n' "$RENDERED" | yq -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "starstar-api")' | jq -se '
   length == 1 and (.[0].spec.template.spec as $pod |
-    ([$pod.volumes[]? | select(.name == "library" and .persistentVolumeClaim.claimName == "starstar-library" and (.persistentVolumeClaim.readOnly // false) == false)] | length) == 1 and
+    ([$pod.volumes[]? | select(.name == "library" and .persistentVolumeClaim.claimName == "starstar-print-library" and (.persistentVolumeClaim.readOnly // false) == false)] | length) == 1 and
     ([$pod.containers[]? | select(.name == "api") |
       select(any(.volumeMounts[]?; .name == "library" and .mountPath == "/var/lib/starstar/library" and (.readOnly // false) == false)) |
       select(any(.env[]?; .name == "STARSTAR_LIBRARY_DIR" and .value == "/var/lib/starstar/library"))] | length) == 1)' >/dev/null \
-  || fail "Deployment must mount PVC starstar-library writable at /var/lib/starstar/library and set STARSTAR_LIBRARY_DIR"
+  || fail "Deployment must mount PVC starstar-print-library writable at /var/lib/starstar/library and set STARSTAR_LIBRARY_DIR"
+
+printf '%s\n' "$RENDERED" | yq -o=json -I=0   'select(.metadata.name == "starstar-print-library" and (.kind == "PersistentVolume" or .kind == "PersistentVolumeClaim"))' | jq -se '
+  length == 2 and
+  any(.[]; .kind == "PersistentVolume" and .spec.claimRef.namespace == "starstar" and .spec.claimRef.name == "starstar-print-library") and
+  any(.[]; .kind == "PersistentVolumeClaim" and .metadata.namespace == "starstar" and .spec.volumeName == "starstar-print-library")' >/dev/null   || fail "Starstar library PV and PVC must be reserved for each other"
 
 IMAGES=$(printf '%s\n' "$RENDERED" | yq -N \
   'select(.kind == "Deployment" and .metadata.name == "starstar-api")

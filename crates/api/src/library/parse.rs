@@ -163,6 +163,19 @@ fn parse_time(value: &str) -> Option<u64> {
     any.then_some(total)
 }
 
+pub(crate) fn image_limits(max_dimension: u32, max_alloc: u64) -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(max_dimension);
+    limits.max_image_height = Some(max_dimension);
+    limits.max_alloc = Some(max_alloc);
+    limits
+}
+pub(crate) fn validated_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut previews = Previews::default();
+    previews.add(bytes, ImageFormat::Png);
+    previews.finish()
+}
+
 #[derive(Default)]
 struct Previews {
     png: Vec<(u64, Vec<u8>)>,
@@ -217,11 +230,7 @@ impl Previews {
                 };
                 decode_budget = remaining;
                 let mut reader = image::ImageReader::with_format(Cursor::new(&*bytes), format);
-                let mut limits = image::Limits::default();
-                limits.max_image_width = Some(1024);
-                limits.max_image_height = Some(1024);
-                limits.max_alloc = Some(16 * 1024 * 1024);
-                reader.limits(limits);
+                reader.limits(image_limits(1024, 16 * 1024 * 1024));
                 let Ok(img) = reader.decode() else {
                     continue;
                 };

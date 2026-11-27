@@ -339,3 +339,35 @@ async fn independent_connections_serialize_refresh_rotation_grace_and_reuse() {
     assert_eq!(grants.len(), 1);
     assert_eq!(grants[0].id, g);
 }
+
+#[tokio::test]
+async fn migration_v4_creates_parts_tables() {
+    let schema = TestSchema::create().await;
+    let db = schema.connect().await.unwrap();
+    let pool = db.pool();
+    let version: i32 = sqlx::query_scalar("SELECT MAX(version) FROM schema_migrations")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(version, 4);
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO parts (name, created_by, created_at) VALUES ('Clip', 'test', 0) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let err =
+        sqlx::query("INSERT INTO parts (name, created_by, created_at) VALUES ('clip', 'test', 0)")
+            .execute(pool)
+            .await
+            .unwrap_err();
+    assert_eq!(
+        err.as_database_error().unwrap().code().as_deref(),
+        Some("23505")
+    );
+    let err = sqlx::query("INSERT INTO part_files (part_id, role, name, sha256, size, kind, parsed, has_preview, uploaded_by, uploaded_at) VALUES ($1, 'slice', 'x.gcode', 'abc', 0, 'gcode', false, false, 'test', 0)").bind(id).execute(pool).await.unwrap_err();
+    assert_eq!(
+        err.as_database_error().unwrap().code().as_deref(),
+        Some("23514")
+    );
+}

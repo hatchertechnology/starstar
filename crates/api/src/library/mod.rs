@@ -1,3 +1,4 @@
+pub mod blobs;
 pub mod parse;
 pub mod store;
 

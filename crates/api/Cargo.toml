@@ -12,7 +12,8 @@ percent-encoding = "2.3"
 futures-util.workspace = true
 tokio-util = { version = "0.7", features = ["io"] }
 tempfile.workspace = true
-image = { version = "0.25", default-features = false, features = ["png", "qoi"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png", "qoi", "jpeg", "webp"] }
 flate2 = "1"
 argon2.workspace = true
 axum.workspace = true

@@ -1,13 +1,12 @@
+use super::blobs::{Blobs, PreviewSource};
 use crate::store::StoreError;
 use axum::body::Bytes;
-use futures_util::{Stream, StreamExt};
-use sha2::{Digest, Sha256};
+use futures_util::Stream;
 use sqlx::{PgPool, Row};
 use starstar_shared::{LibraryFile, LibraryKind, LibrarySort};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
@@ -38,110 +37,44 @@ impl From<LibraryError> for crate::error::ApiError {
 }
 
 pub struct LibraryStore {
-    dir: PathBuf,
+    blobs: Blobs,
     pool: PgPool,
-    _temp: Option<tempfile::TempDir>,
 }
 impl LibraryStore {
     pub fn open(dir: &Path, pool: PgPool) -> Result<Self, StoreError> {
-        create_durable_dirs(dir)?;
-        for sub in ["blobs", "thumbs", "tmp"] {
-            create_durable_dirs(&dir.join(sub))?;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if std::fs::metadata(dir)?.permissions().mode() & 0o222 == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "directory is not writable",
-                )
-                .into());
-            }
-        }
-        for sub in ["blobs", "thumbs", "tmp"] {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if std::fs::metadata(dir.join(sub))?.permissions().mode() & 0o222 == 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        format!("{sub} is not writable"),
-                    )
-                    .into());
-                }
-            }
-            drop(tempfile::NamedTempFile::new_in(dir.join(sub))?);
-        }
-        for entry in std::fs::read_dir(dir.join("tmp"))? {
-            let path = entry?.path();
-            if path.is_dir() {
-                std::fs::remove_dir_all(path)?;
-            } else {
-                std::fs::remove_file(path)?;
-            }
-        }
-        sync_dir(dir)?;
         Ok(Self {
-            dir: dir.to_owned(),
+            blobs: Blobs::open(dir)?,
             pool,
-            _temp: None,
         })
     }
     pub fn temporary(pool: PgPool) -> Result<Self, StoreError> {
-        let temp = tempfile::tempdir()?;
-        let mut store = Self::open(temp.path(), pool)?;
-        store._temp = Some(temp);
-        Ok(store)
-    }
-    fn blob_for(&self, sha: &str) -> PathBuf {
-        self.dir
-            .join("blobs")
-            .join(&sha[..2])
-            .join(&sha[2..4])
-            .join(sha)
+        Ok(Self {
+            blobs: Blobs::temporary()?,
+            pool,
+        })
     }
     pub fn blob_path(&self, f: &LibraryFile) -> PathBuf {
-        self.blob_for(&f.sha256)
+        self.blobs.path(&f.sha256)
     }
     pub fn preview_path(&self, f: &LibraryFile) -> Option<PathBuf> {
-        f.has_preview
-            .then(|| self.dir.join("thumbs").join(format!("{}.png", f.sha256)))
+        f.has_preview.then(|| self.blobs.preview(&f.sha256))
     }
     pub async fn add<E>(
         &self,
         name: &str,
         kind: LibraryKind,
         uploaded_by: &str,
-        mut body: impl Stream<Item = Result<Bytes, E>> + Unpin,
+        body: impl Stream<Item = Result<Bytes, E>> + Unpin,
         expected_len: u64,
         max: u64,
     ) -> Result<(LibraryFile, bool), LibraryError> {
-        if expected_len > max {
-            return Err(LibraryError::TooLarge(max));
-        }
-        let temp = tempfile::NamedTempFile::new_in(self.dir.join("tmp"))?;
-        let mut out = tokio::fs::File::from_std(temp.reopen()?);
-        let mut hash = Sha256::new();
-        let mut size = 0u64;
-        while let Some(chunk) = body.next().await {
-            let chunk = chunk.map_err(|_| LibraryError::Incomplete)?;
-            size = size
-                .checked_add(chunk.len() as u64)
-                .ok_or(LibraryError::TooLarge(max))?;
-            if size > max {
-                return Err(LibraryError::TooLarge(max));
-            }
-            hash.update(&chunk);
-            out.write_all(&chunk).await?;
-        }
-        if size != expected_len {
-            return Err(LibraryError::Incomplete);
-        }
-        out.sync_all().await?;
-        drop(out);
-        let sha = format!("{:x}", hash.finalize());
-        let parsed = super::parse::parse_file(temp.path(), kind)?;
+        let ingested = self
+            .blobs
+            .receive(body, expected_len, max, PreviewSource::Slice(kind))
+            .await?;
+        let sha = &ingested.sha256;
+        let size = ingested.size;
+        let parsed = ingested.parsed.as_ref().expect("slice is parsed");
         let mut tx = self.pool.begin().await?;
         // Separate namespaces prevent name/digest lock collisions. All adds acquire name first.
         sqlx::query("SELECT pg_advisory_xact_lock(1, hashtext($1))")
@@ -149,13 +82,10 @@ impl LibraryStore {
             .execute(&mut *tx)
             .await?;
         sqlx::query("SELECT pg_advisory_xact_lock(2, hashtext($1))")
-            .bind(&sha)
+            .bind(sha)
             .execute(&mut *tx)
             .await?;
-        let blob = self.blob_for(&sha);
-        let preview = self.dir.join("thumbs").join(format!("{sha}.png"));
-        let blob_exists = regular_or_absent(&blob)?;
-        let preview_exists = regular_or_absent(&preview)?;
+        self.blobs.validate_assets(sha)?;
         if let Some(row) =
             sqlx::query("SELECT * FROM library_files WHERE name = $1 ORDER BY version DESC LIMIT 1")
                 .bind(name)
@@ -163,39 +93,12 @@ impl LibraryStore {
                 .await?
         {
             let existing = row_file(row)?;
-            if existing.sha256 == sha {
+            if existing.sha256 == *sha {
                 tx.commit().await?;
                 return Ok((existing, false));
             }
         }
-        let blob_parent = blob.parent().expect("blob parent");
-        std::fs::create_dir_all(blob_parent)?;
-        sync_dir(&self.dir.join("blobs"))?;
-        sync_dir(blob_parent.parent().expect("blob shard parent"))?;
-        if !blob_exists {
-            std::fs::rename(temp.path(), &blob)?;
-        }
-        // Sync existing files too: a previous interrupted publication may have
-        // left an entry whose directory was never synced.
-        std::fs::File::open(&blob)?.sync_all()?;
-        sync_dir(blob_parent)?;
-        sync_dir(&self.dir.join("tmp"))?;
-        if let Some(bytes) = &parsed.preview_png
-            && !preview_exists
-        {
-            use std::io::Write;
-            let mut preview_temp = tempfile::NamedTempFile::new_in(self.dir.join("tmp"))?;
-            preview_temp.write_all(bytes)?;
-            preview_temp.as_file().sync_all()?;
-            preview_temp
-                .persist(&preview)
-                .map_err(|error| error.error)?;
-        }
-        if preview.exists() {
-            std::fs::File::open(&preview)?.sync_all()?;
-            sync_dir(&self.dir.join("thumbs"))?;
-            sync_dir(&self.dir.join("tmp"))?;
-        }
+        self.blobs.publish(&ingested)?;
         let version: i32 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(version),0)+1 FROM library_files WHERE name=$1",
         )
@@ -212,10 +115,10 @@ impl LibraryStore {
             None
         };
         let row = sqlx::query("INSERT INTO library_files (name,version,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *")
-            .bind(name).bind(version).bind(&sha).bind(size as i64).bind(match kind { LibraryKind::Bgcode => "bgcode", LibraryKind::Gcode => "gcode" }).bind(meta).bind(parsed.parsed).bind(parsed.preview_png.is_some()).bind(uploaded_by).bind(now).fetch_one(&mut *tx).await?;
+            .bind(name).bind(version).bind(sha).bind(size as i64).bind(match kind { LibraryKind::Bgcode => "bgcode", LibraryKind::Gcode => "gcode" }).bind(meta).bind(parsed.parsed).bind(parsed.preview_png.is_some()).bind(uploaded_by).bind(now).fetch_one(&mut *tx).await?;
         let file = row_file(row)?;
         sqlx::query("DELETE FROM library_cleanup WHERE sha256=$1")
-            .bind(&sha)
+            .bind(sha)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -250,95 +153,8 @@ impl LibraryStore {
             .map(row_file)
             .collect()
     }
-    /// Reconcile durable cleanup intents and assets left by interrupted uploads.
-    /// Call once during startup, before accepting requests.
     pub async fn reconcile(&self) -> Result<(), StoreError> {
-        let mut digests: std::collections::BTreeSet<String> =
-            sqlx::query_scalar::<_, String>("SELECT sha256 FROM library_cleanup")
-                .fetch_all(&self.pool)
-                .await?
-                .into_iter()
-                .collect();
-        for entry in std::fs::read_dir(self.dir.join("thumbs"))? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if let Some(sha) = name.strip_suffix(".png").filter(|sha| valid_digest(sha)) {
-                digests.insert(sha.to_owned());
-            }
-        }
-        for first in std::fs::read_dir(self.dir.join("blobs"))? {
-            let first = first?;
-            if !first.file_type()?.is_dir() {
-                continue;
-            }
-            for second in std::fs::read_dir(first.path())? {
-                let second = second?;
-                if !second.file_type()?.is_dir() {
-                    continue;
-                }
-                for entry in std::fs::read_dir(second.path())? {
-                    let entry = entry?;
-                    if !entry.file_type()?.is_file() {
-                        continue;
-                    }
-                    let name = entry.file_name();
-                    let sha = name.to_string_lossy();
-                    if valid_digest(&sha) && entry.path() == self.blob_for(&sha) {
-                        digests.insert(sha.into_owned());
-                    }
-                }
-            }
-        }
-        for sha in digests {
-            if valid_digest(&sha) {
-                // Persist the intent before attempting cleanup, including for
-                // orphans discovered by scanning rather than by deletion.
-                sqlx::query(
-                    "INSERT INTO library_cleanup (sha256) VALUES ($1) ON CONFLICT DO NOTHING",
-                )
-                .bind(&sha)
-                .execute(&self.pool)
-                .await?;
-                if let Err(error) = self.cleanup_digest(&sha).await {
-                    eprintln!("library cleanup for {sha} failed: {error}");
-                }
-            }
-        }
-        Ok(())
-    }
-    async fn cleanup_digest(&self, sha: &str) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(2, hashtext($1))")
-            .bind(sha)
-            .execute(&mut *tx)
-            .await?;
-        let remaining: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM library_files WHERE sha256=$1")
-                .bind(sha)
-                .fetch_one(&mut *tx)
-                .await?;
-        if remaining == 0 {
-            let blob = self.blob_for(sha);
-            let preview = self.dir.join("thumbs").join(format!("{sha}.png"));
-            for path in [&blob, &preview] {
-                if let Err(e) = std::fs::remove_file(path)
-                    && e.kind() != io::ErrorKind::NotFound
-                {
-                    return Err(e.into());
-                }
-            }
-            if let Some(parent) = blob.parent().filter(|p| p.exists()) {
-                sync_dir(parent)?;
-            }
-            sync_dir(&self.dir.join("thumbs"))?;
-        }
-        sqlx::query("DELETE FROM library_cleanup WHERE sha256=$1")
-            .bind(sha)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(())
+        self.blobs.reconcile(&self.pool).await
     }
     pub async fn delete(&self, id: i64) -> Result<bool, StoreError> {
         let Some(file) = self.get(id).await? else {
@@ -365,60 +181,9 @@ impl LibraryStore {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.cleanup_digest(&file.sha256).await?;
+        self.blobs.cleanup_digest(&self.pool, &file.sha256).await?;
         Ok(true)
     }
-}
-fn regular_or_absent(path: &Path) -> io::Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_file() => Ok(true),
-        Ok(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "library asset is not a regular file",
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-fn create_durable_dirs(path: &Path) -> io::Result<()> {
-    let mut missing = Vec::new();
-    let mut current = path;
-    while !current.exists() {
-        missing.push(current.to_path_buf());
-        current = current
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-    }
-    for directory in missing.iter().rev() {
-        match std::fs::create_dir(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => {}
-            Err(error) => return Err(error),
-        }
-        let parent = directory
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        sync_dir(parent)?;
-        sync_dir(directory)?;
-    }
-    // Also persist the entry for an already-existing configured directory.
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    sync_dir(parent)?;
-    Ok(())
-}
-fn sync_dir(path: &Path) -> io::Result<()> {
-    std::fs::File::open(path)?.sync_all()
-}
-fn valid_digest(sha: &str) -> bool {
-    sha.len() == 64
-        && sha
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn row_file(row: sqlx::postgres::PgRow) -> Result<LibraryFile, StoreError> {
     let kind: String = row.try_get("kind")?;
@@ -449,6 +214,7 @@ mod tests {
     use super::*;
     use crate::store::test_db::TestSchema;
     use futures_util::stream;
+    use sha2::{Digest, Sha256};
     use starstar_shared::LibraryKind;
 
     #[tokio::test]
@@ -760,10 +526,10 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(!store.blob_for(&bad).exists());
+        assert!(!store.blobs.path(&bad).exists());
         assert_eq!(std::fs::read_dir(dir.join("tmp")).unwrap().count(), 0);
         std::fs::remove_dir(obstructed).unwrap();
-        let blob = store.blob_for(&bad);
+        let blob = store.blobs.path(&bad);
         std::fs::create_dir_all(&blob).unwrap();
         let upload = stream::iter(vec![Ok::<_, ()>(Bytes::from_static(data))]);
         assert!(

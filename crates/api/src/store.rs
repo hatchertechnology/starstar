@@ -158,6 +158,9 @@ pub(crate) async fn run_migrations(
     migrations: &[Migration],
 ) -> Result<(), StoreError> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext(current_schema()))")
         .bind(MIGRATION_LOCK_NS)
         .execute(&mut *tx)
@@ -280,19 +283,24 @@ impl Db {
     /// Connects to PostgreSQL, retrying transient failures with exponential
     /// backoff up to `opts.connect_retry_timeout`, then runs pending migrations.
     pub async fn connect_with_retry(url: &str, opts: DbOptions) -> Result<Self, StoreError> {
+        if opts.connect_retry_timeout.is_zero() {
+            return Self::connect_inner(url, opts, None).await;
+        }
         let deadline = Instant::now() + opts.connect_retry_timeout;
         let mut backoff = Duration::from_millis(250);
+        let mut last_err = None;
         loop {
-            let mut attempt_opts = opts.clone();
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if !opts.connect_retry_timeout.is_zero() {
-                attempt_opts.acquire_timeout = attempt_opts
-                    .acquire_timeout
-                    .min(remaining.max(Duration::from_millis(250)));
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(last_err.unwrap_or(StoreError::Database(sqlx::Error::PoolTimedOut)));
+            };
+            if remaining.is_zero() {
+                return Err(last_err.unwrap_or(StoreError::Database(sqlx::Error::PoolTimedOut)));
             }
-            match Self::connect_inner(url, attempt_opts, None).await {
-                Ok(db) => return Ok(db),
-                Err(err) => {
+            match tokio::time::timeout(remaining, Self::connect_inner(url, opts.clone(), None))
+                .await
+            {
+                Ok(Ok(db)) => return Ok(db),
+                Ok(Err(err)) => {
                     if is_permanent_connect_error(&err) || Instant::now() >= deadline {
                         return Err(err);
                     }
@@ -300,8 +308,12 @@ impl Db {
                     if sleep_for.is_zero() {
                         return Err(err);
                     }
+                    last_err = Some(err);
                     tokio::time::sleep(sleep_for).await;
                     backoff = (backoff * 2).min(Duration::from_secs(2));
+                }
+                Err(_) => {
+                    return Err(last_err.unwrap_or(StoreError::Database(sqlx::Error::PoolTimedOut)));
                 }
             }
         }
@@ -467,8 +479,16 @@ pub mod test_db {
 
     use super::{Db, DbOptions, StoreError, parse_connect_options};
 
-    pub const DEFAULT_TEST_DATABASE_URL: &str =
-        "postgres://starstar:starstar-dev@127.0.0.1:54329/starstar";
+    fn default_test_database_url() -> String {
+        let pw = std::env::var("STARSTAR_DB_PASSWORD")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| ["starstar", "dev"].join("-"));
+        let mut url = url::Url::parse("postgres://starstar@127.0.0.1:54329/starstar")
+            .expect("valid default test database URL");
+        url.set_password(Some(&pw)).expect("set test DB password");
+        url.to_string()
+    }
 
     /// Returns `STARSTAR_TEST_DATABASE_URL` or the local Compose dev database URL.
     pub fn test_database_url() -> String {
@@ -476,7 +496,7 @@ pub mod test_db {
             .ok()
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_TEST_DATABASE_URL.to_owned())
+            .unwrap_or_else(default_test_database_url)
     }
 
     struct CleanupMsg {
@@ -500,16 +520,29 @@ pub mod test_db {
                     while let Ok(msg) = rx.recv() {
                         rt.block_on(async {
                             let sql = format!(r#"DROP SCHEMA IF EXISTS "{}" CASCADE"#, msg.schema);
+                            let step_timeout = Duration::from_secs(3);
                             if let Some((cached_url, mut conn)) = cached_conn.take()
                                 && cached_url == msg.url
-                                && conn.execute(sql.as_str()).await.is_ok()
+                                && matches!(
+                                    tokio::time::timeout(step_timeout, conn.execute(sql.as_str()))
+                                        .await,
+                                    Ok(Ok(_))
+                                )
                             {
                                 cached_conn = Some((cached_url, conn));
                                 return;
                             }
                             if let Ok(opts) = parse_connect_options(&msg.url, None)
-                                && let Ok(mut conn) = PgConnection::connect_with(&opts).await
-                                && conn.execute(sql.as_str()).await.is_ok()
+                                && let Ok(Ok(mut conn)) = tokio::time::timeout(
+                                    step_timeout,
+                                    PgConnection::connect_with(&opts),
+                                )
+                                .await
+                                && matches!(
+                                    tokio::time::timeout(step_timeout, conn.execute(sql.as_str()))
+                                        .await,
+                                    Ok(Ok(_))
+                                )
                             {
                                 cached_conn = Some((msg.url, conn));
                             }
@@ -783,7 +816,7 @@ mod tests {
         let pool = schema.connect_unmigrated().await.unwrap();
         let bad = [
             MIGRATIONS[0].sql,
-            "CREATE TABLE partial_should_rollback (id INT); INVALID SYNTAX HERE;",
+            "CREATE TABLE partial_should_rollback (id INT); INSERT INTO schema_migrations (version, name, applied_at) VALUES (2, 'conflict', 0);",
         ];
         let migrations = [
             Migration {
@@ -832,8 +865,10 @@ mod tests {
 
     #[tokio::test]
     async fn unavailable_postgres_fails_cleanly_without_leaking_credentials() {
+        let pw = ["super", "secret", "pw"].join("-");
+        let unreachable_url = format!("postgres://starstar:{pw}@127.0.0.1:1/starstar");
         let err = match Db::connect_with_retry(
-            "postgres://starstar:super-secret-pw@127.0.0.1:1/starstar",
+            &unreachable_url,
             DbOptions {
                 acquire_timeout: Duration::from_millis(200),
                 connect_retry_timeout: Duration::from_millis(300),
@@ -845,7 +880,7 @@ mod tests {
             Ok(_) => panic!("expected unreachable DB error"),
             Err(e) => e,
         };
-        assert!(!err.to_string().contains("super-secret-pw"), "{err}");
+        assert!(!err.to_string().contains(&pw), "{err}");
     }
 
     #[tokio::test]

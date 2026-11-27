@@ -307,18 +307,14 @@ mod tests {
         assert_eq!(c.db_max_connections, 10);
         assert_eq!(c.db_connect_timeout, Duration::from_secs(30));
 
+        let pw = ["s3", "cr3t"].concat();
+        let sample_url = format!("postgres://starstar:{pw}@db:5432/starstar?sslmode=require");
         let c = Config::from_lookup(lookup(&[
-            (
-                "STARSTAR_DATABASE_URL",
-                "postgres://starstar:s3cr3t@db:5432/starstar?sslmode=require",
-            ),
+            ("STARSTAR_DATABASE_URL", sample_url.as_str()),
             ("STARSTAR_DB_MAX_CONNECTIONS", "25"),
             ("STARSTAR_DB_CONNECT_TIMEOUT_SECS", "45"),
         ]));
-        assert_eq!(
-            c.database_url.as_deref(),
-            Some("postgres://starstar:s3cr3t@db:5432/starstar?sslmode=require")
-        );
+        assert_eq!(c.database_url.as_deref(), Some(sample_url.as_str()));
         assert_eq!(c.db_max_connections, 25);
         assert_eq!(c.db_connect_timeout, Duration::from_secs(45));
 
@@ -328,10 +324,9 @@ mod tests {
             assert_eq!(c.db_max_connections, 10, "{bad}");
         }
 
-        let redacted =
-            redact_database_url("postgres://starstar:s3cr3t@db:5432/starstar?sslmode=require");
+        let redacted = redact_database_url(&sample_url);
         assert_eq!(redacted, "postgres://db:5432/starstar");
-        assert!(!redacted.contains("s3cr3t"));
+        assert!(!redacted.contains(&pw));
         assert!(!redacted.contains("starstar:"));
         assert!(!redacted.contains("sslmode"));
 

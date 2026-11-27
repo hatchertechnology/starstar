@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: starstar
       POSTGRES_USER: starstar
-      POSTGRES_PASSWORD: starstar-dev
+      POSTGRES_PASSWORD: ${STARSTAR_DB_PASSWORD:-starstar-dev}
     ports:
       - "127.0.0.1:54329:5432"
     volumes:
@@ -25,7 +25,7 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     environment:
-      STARSTAR_DATABASE_URL: postgres://starstar:starstar-dev@db:5432/starstar
+      STARSTAR_DATABASE_URL: ${STARSTAR_DATABASE_URL:-postgres://starstar:starstar-dev@db:5432/starstar}
       STARSTAR_BIND: 0.0.0.0:8080
       STARSTAR_PUBLIC_URL: http://127.0.0.1:8080
       STARSTAR_ALLOW_INSECURE_HTTP: "1"

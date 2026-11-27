@@ -191,7 +191,6 @@ impl AuthStore {
         client_id: &str,
     ) -> Result<IssuedTokens, GrantError> {
         let mut tx = self.db.pool().begin().await?;
-        let now = self.now();
         let hash = hash_token(refresh_token);
         let invalid = || GrantError::Invalid("invalid refresh token".to_owned());
 
@@ -231,6 +230,7 @@ impl AuthStore {
         let Some(token_row) = token_row else {
             return Err(invalid());
         };
+        let now = self.now();
         let expires_at: i64 = token_row.try_get(0)?;
         let rotated_at: Option<i64> = token_row.try_get(1)?;
         let grace_used_at: Option<i64> = token_row.try_get(2)?;

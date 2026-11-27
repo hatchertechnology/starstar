@@ -175,7 +175,6 @@ impl AuthStore {
         verifier: &str,
     ) -> Result<IssuedTokens, GrantError> {
         let mut tx = self.db.pool().begin().await?;
-        let now = self.now();
         let hash = hash_token(code);
         let invalid = |m: &str| GrantError::Invalid(m.to_owned());
 
@@ -190,6 +189,7 @@ impl AuthStore {
         let Some(row) = row else {
             return Err(invalid("invalid authorization code"));
         };
+        let now = self.now();
         let c_client: String = row.try_get(0)?;
         let user_id: i64 = row.try_get(1)?;
         let role: String = row.try_get(2)?;

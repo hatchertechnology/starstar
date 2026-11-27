@@ -25,7 +25,7 @@ jobs:
         image: postgres:17-bookworm
         env:
           POSTGRES_USER: starstar
-          POSTGRES_PASSWORD: starstar-ci
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}
           POSTGRES_DB: starstar
         ports:
           - 5432:5432
@@ -39,27 +39,27 @@ jobs:
       CARGO_TERM_COLOR: always
       CI: 1
       NUXT_TELEMETRY_DISABLED: 1
-      STARSTAR_TEST_DATABASE_URL: postgres://starstar:starstar-ci@127.0.0.1:5432/starstar
+      STARSTAR_TEST_DATABASE_URL: postgres://starstar:ci-${{ github.run_id }}@127.0.0.1:5432/starstar
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy, llvm-tools-preview
 
       - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@d7fc31c26763d448f2a8836afda46149eac7705d # cargo-llvm-cov
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           cache: npm
@@ -76,7 +76,8 @@ jobs:
 
       - name: Web install, typecheck, and coverage
         run: |
-          npm --prefix web ci
+          npm --prefix web ci --ignore-scripts
+          npm --prefix web run postinstall
           npm --prefix web run typecheck
           npm --prefix web run test:coverage
           sed -i 's|^SF:app/|SF:web/app/|' web/coverage/lcov.info
@@ -93,6 +94,10 @@ jobs:
 
       - name: SonarQube Cloud scan
         if: steps.sonar_check.outputs.enabled == 'true'
-        uses: SonarSource/sonarqube-scan-action@v8
+        uses: SonarSource/sonarqube-scan-action@70bad232163b09d998ea0707ee80c0ec80798c16 # v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.rust.lcov.reportPaths=${{ github.workspace }}/target/llvm-cov.lcov
+            -Dsonar.rust.clippyReport.reportPaths=${{ github.workspace }}/clippy-report.json

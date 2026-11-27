@@ -2,9 +2,9 @@
 FROM node:24-bookworm-slim AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY web/ ./
-RUN npm run generate
+RUN npx --no-install nuxt prepare && npm run generate
 
 FROM rust:1.90-bookworm AS api
 WORKDIR /src

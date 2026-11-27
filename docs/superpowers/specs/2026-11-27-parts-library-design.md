@@ -302,6 +302,7 @@ it.
 - `POST /api/parts/{id}/setups` (Operator): `{ name }`. `PATCH` and `DELETE`
   (Admin) on `/api/setups/{id}`.
 - `POST /api/setups/{id}/revisions` (Operator): `{ model_revision?, note? }`.
+- `DELETE /api/model-revisions/{id}` and `DELETE /api/setup-revisions/{id}` (Admin): the revision deletes described under **Deleting**.
 - `POST /api/parts/{id}/files?role=…&model_revision=…|setup_revision=…&name=…[&profile=…][&replace=true]`
   (Operator): streaming upload with `Content-Length`, the same limits as
   phase 1. A `project_3mf` upload to a setup (`setup=…` instead of

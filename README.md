@@ -8,7 +8,7 @@ See the [documentation index](docs/README.md).
 starstar manages Prusa MK4 and MINI printers through PrusaLink. It has:
 
 - an **API** (Rust, `starstar-api`) with built-in users, roles (viewer, operator, admin) and an OAuth 2.1 server;
-- a **web UI** (Nuxt, in `web/`) served by the API;
+- a **web UI** (Nuxt, in `web/`) served by the API. Each print file has a details page with the preview image the printer shows (`GET /api/printers/{name}/thumbnails/{storage}/{path}`);
 - a **CLI** (`starstar`) for printers, jobs, files, cameras and firmware;
 - an **MCP endpoint** at `/mcp` for AI agents;
 - an **agent skill** that teaches agents to use the CLI.

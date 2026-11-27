@@ -243,11 +243,10 @@ impl Blobs {
             .bind(sha)
             .execute(&mut *tx)
             .await?;
-        let remaining: i64 =
-            sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM library_files WHERE sha256=$1) + (SELECT COUNT(*) FROM part_files WHERE sha256=$1)")
-                .bind(sha)
-                .fetch_one(&mut *tx)
-                .await?;
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM part_files WHERE sha256=$1")
+            .bind(sha)
+            .fetch_one(&mut *tx)
+            .await?;
         if remaining == 0 {
             let blob = self.path(sha);
             let preview = self.dir.join("thumbs").join(format!("{sha}.png"));

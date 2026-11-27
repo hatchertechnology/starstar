@@ -188,6 +188,7 @@ CREATE UNIQUE INDEX part_files_one_3mf ON part_files (setup_revision_id) WHERE r
 CREATE UNIQUE INDEX part_files_one_slice ON part_files (setup_revision_id, target_family, round(target_nozzle::numeric,3), lower(coalesce(profile,''))) WHERE role='slice' AND superseded_by IS NULL AND target_family IS NOT NULL AND target_nozzle IS NOT NULL;
 CREATE INDEX part_files_sha256 ON part_files (sha256);
 
+LOCK TABLE library_files IN ACCESS EXCLUSIVE MODE;
 DO $$
 DECLARE
     source RECORD;
@@ -221,8 +222,8 @@ BEGIN
                 VALUES (part_key, setup_key, file_row.version, model_key, file_row.uploaded_by, file_row.uploaded_at) RETURNING id INTO revision_key;
             INSERT INTO part_files (part_id, setup_revision_id, role, name, sha256, size, kind, meta, parsed, has_preview, uploaded_by, uploaded_at, target_family, target_nozzle, profile)
                 VALUES (part_key, revision_key, 'slice', file_row.name, file_row.sha256, file_row.size, file_row.kind, file_row.meta, file_row.parsed, file_row.has_preview, file_row.uploaded_by, file_row.uploaded_at,
-                    CASE WHEN upper(file_row.meta->>'printer_model') LIKE 'MK4%' THEN 'mk4' WHEN upper(file_row.meta->>'printer_model') LIKE 'MINI%' THEN 'mini' END,
-                    CASE WHEN jsonb_typeof(file_row.meta->'nozzle_diameter') = 'number' THEN round((file_row.meta->>'nozzle_diameter')::numeric, 3)::double precision END, NULL);
+                    CASE WHEN file_row.parsed AND upper(file_row.meta->>'printer_model') LIKE 'MK4%' THEN 'mk4' WHEN file_row.parsed AND upper(file_row.meta->>'printer_model') LIKE 'MINI%' THEN 'mini' END,
+                    CASE WHEN file_row.parsed AND jsonb_typeof(file_row.meta->'nozzle_diameter') = 'number' THEN round((file_row.meta->>'nozzle_diameter')::numeric, 3)::double precision END, NULL);
         END LOOP;
     END LOOP;
     IF (SELECT count(*) FROM part_files WHERE role = 'slice') <> (SELECT count(*) FROM library_files) THEN
@@ -918,10 +919,30 @@ mod tests {
                     false,
                     "bob".into(),
                     20,
-                    Some("mini".into()),
-                    Some(0.6),
+                    None,
+                    None,
                     None
                 )
+            ]
+        );
+        let details: Vec<(String, String, serde_json::Value, i32)> = sqlx::query_as(
+            "SELECT f.name, f.role, f.meta, m.number FROM part_files f JOIN setup_revisions r ON r.id=f.setup_revision_id JOIN model_revisions m ON m.id=r.model_revision_id ORDER BY r.number"
+        ).fetch_all(&pool).await.unwrap();
+        assert_eq!(
+            details,
+            vec![
+                (
+                    "cube.bgcode".into(),
+                    "slice".into(),
+                    serde_json::json!({"printer_model":"MK4S", "nozzle_diameter":0.40049}),
+                    1
+                ),
+                (
+                    "cube.bgcode".into(),
+                    "slice".into(),
+                    serde_json::json!({"printer_model":"MINI+", "nozzle_diameter":0.6}),
+                    1
+                ),
             ]
         );
     }

@@ -1,9 +1,46 @@
-.git
-target
-web/node_modules
-web/.nuxt
-web/.output
-web/.data
-web/coverage
-web/dist
-starstar.db*
+# Allowlist: the image build reads only these paths. Add a path here before COPYing it
+# (for example web/public/ if the UI gains static files).
+*
+!Cargo.toml
+!Cargo.lock
+!LICENSE
+!crates/
+# Workspace members only; add a new crate here.
+crates/*
+!crates/api/
+!crates/cli/
+!crates/shared/
+crates/*/*
+!crates/api/Cargo.toml
+!crates/api/src/
+!crates/cli/Cargo.toml
+!crates/cli/src/
+!crates/shared/Cargo.toml
+!crates/shared/src/
+!web/
+web/*
+!web/package.json
+!web/package-lock.json
+!web/nuxt.config.ts
+!web/tsconfig.json
+!web/app/
+
+# Second layer: never send these, even inside an admitted subtree.
+crates/*/tests/
+**/target/
+web/node_modules/
+web/.nuxt/
+web/.output/
+web/test/
+**/.env
+**/.env.*
+**/.npmrc
+**/*.pem
+**/*.key
+**/*.db
+**/*.db-*
+**/*.sqlite*
+**/node_modules/
+**/.nuxt/
+**/.output/
+**/*.rs.bk

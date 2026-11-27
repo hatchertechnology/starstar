@@ -1,5 +1,7 @@
 # Local development stack (PostgreSQL + API/UI).
 # Credentials and plain HTTP here are for local development only; do not use in production.
+# Host ports default to 8080 (app) and 54329 (db); override with STARSTAR_HTTP_PORT and
+# STARSTAR_DB_PORT, for example to run a second stack under another project name (-p).
 services:
   db:
     image: docker.io/library/postgres:17-bookworm
@@ -8,11 +10,13 @@ services:
       POSTGRES_USER: starstar
       POSTGRES_PASSWORD: ${STARSTAR_DB_PASSWORD:-starstar-dev}
     ports:
-      - "127.0.0.1:54329:5432"
+      - "127.0.0.1:${STARSTAR_DB_PORT:-54329}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U starstar -d starstar"]
+      # TCP, not the Unix socket: during first-run init the image's temporary server
+      # listens on the socket only, so a socket check can pass before TCP is ready.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U starstar -d starstar"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -23,13 +27,39 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${STARSTAR_HTTP_PORT:-8080}:8080"
     environment:
       STARSTAR_DATABASE_URL: ${STARSTAR_DATABASE_URL:-postgres://starstar:starstar-dev@db:5432/starstar}
       STARSTAR_BIND: 0.0.0.0:8080
-      STARSTAR_PUBLIC_URL: http://127.0.0.1:8080
+      STARSTAR_PUBLIC_URL: http://127.0.0.1:${STARSTAR_HTTP_PORT:-8080}
       STARSTAR_ALLOW_INSECURE_HTTP: "1"
       STARSTAR_SETUP_TOKEN: ${STARSTAR_SETUP_TOKEN:-}
+    # Same runtime restrictions as the Thor pod securityContext, so local runs catch regressions.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      # Bare form: documented by Podman and accepted by Docker.
+      - no-new-privileges
+    stop_grace_period: 30s
+    healthcheck:
+      # The image has no curl or wget: bash's /dev/tcp sends one request to /api/health,
+      # which returns 200 only while PostgreSQL answers. `$$` escapes Compose interpolation.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          && printf 'GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          && IFS= read -r -t 5 line <&3
+          && [[ $$line == 'HTTP/1.'?' 200 '* ]]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
 volumes:
   postgres-data:

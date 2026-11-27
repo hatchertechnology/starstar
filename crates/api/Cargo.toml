@@ -10,6 +10,7 @@ authors.workspace = true
 [dependencies]
 percent-encoding = "2.3"
 futures-util.workspace = true
+tokio-util = { version = "0.7", features = ["io"] }
 tempfile.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "qoi"] }
 flate2 = "1"

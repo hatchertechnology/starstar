@@ -24,6 +24,12 @@ const AUTH_ROUTES: &[(&str, &str, Role)] = &[
 
 /// Every /api and /mcp path served today, plus paths no route matches.
 const GUARDED: &[(&str, &str)] = &[
+    ("GET", "/api/library"),
+    ("POST", "/api/library"),
+    ("GET", "/api/library/1"),
+    ("GET", "/api/library/1/preview"),
+    ("GET", "/api/library/1/download"),
+    ("DELETE", "/api/library/1"),
     ("GET", "/api/printers"),
     ("POST", "/api/printers"),
     ("GET", "/api/printers/mk4"),

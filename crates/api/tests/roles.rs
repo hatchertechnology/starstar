@@ -12,6 +12,7 @@ use serde_json::json;
 use starstar_api::AppState;
 use starstar_api::auth::Caller;
 use starstar_api::error::ApiError;
+use starstar_api::library;
 use starstar_api::printers::files::UploadBody;
 use starstar_api::printers::{cameras, files, jobs, registry, telemetry, transfer, update};
 use starstar_shared::{
@@ -70,6 +71,53 @@ fn operations(fake_host: String) -> Vec<(&'static str, Role, Role, Op)> {
         }
     };
     vec![
+        (
+            "library_list",
+            Role::Viewer,
+            library::LIST_LIBRARY_ROLE,
+            op(|s, c| async move { library::list_files(&s, &c, Default::default()).await }),
+        ),
+        (
+            "library_get",
+            Role::Viewer,
+            library::LIST_LIBRARY_ROLE,
+            op(|s, c| async move { library::get_file(&s, &c, 1).await }),
+        ),
+        (
+            "library_preview",
+            Role::Viewer,
+            library::LIST_LIBRARY_ROLE,
+            op(|s, c| async move { library::preview(&s, &c, 1).await }),
+        ),
+        (
+            "library_download",
+            Role::Viewer,
+            library::LIST_LIBRARY_ROLE,
+            op(|s, c| async move { library::open_download(&s, &c, 1).await }),
+        ),
+        (
+            "library_upload",
+            Role::Operator,
+            library::UPLOAD_LIBRARY_ROLE,
+            op(|s, c| async move {
+                library::add_file(
+                    &s,
+                    &c,
+                    "a.gcode",
+                    futures_util::stream::iter(vec![Ok::<_, ()>(axum::body::Bytes::from_static(
+                        b"x",
+                    ))]),
+                    1,
+                )
+                .await
+            }),
+        ),
+        (
+            "library_delete",
+            Role::Admin,
+            library::DELETE_LIBRARY_ROLE,
+            op(|s, c| async move { library::delete_file(&s, &c, 1).await }),
+        ),
         (
             "list_printers",
             Role::Viewer,
@@ -292,7 +340,7 @@ fn operations(fake_host: String) -> Vec<(&'static str, Role, Role, Op)> {
 async fn operations_enforce_roles() {
     let probe = TestApi::start().await;
     let count = operations(probe.fake.addr.to_string()).len();
-    assert_eq!(count, 33, "one entry per printers:: operation");
+    assert_eq!(count, 39, "one entry per printers:: operation");
 
     for index in 0..count {
         // A fresh printer per operation, since some of them remove or add one.
@@ -328,6 +376,12 @@ fn routes() -> Vec<(Method, &'static str, Role)> {
     use Method as M;
     use Role::{Admin, Operator, Viewer};
     vec![
+        (M::GET, "/api/library", Viewer),
+        (M::POST, "/api/library?name=a.gcode", Operator),
+        (M::GET, "/api/library/1", Viewer),
+        (M::GET, "/api/library/1/preview", Viewer),
+        (M::GET, "/api/library/1/download", Viewer),
+        (M::DELETE, "/api/library/1", Admin),
         // Viewer
         (M::GET, "/api/printers", Viewer),
         (M::GET, "/api/printers/mk4", Viewer),
@@ -476,7 +530,7 @@ fn is_routing_failure(r: &TestResponse) -> bool {
 #[tokio::test]
 async fn role_table_has_every_route() {
     let routes = routes();
-    assert_eq!(routes.len(), 35);
+    assert_eq!(routes.len(), 41);
     for (method, uri, _) in &routes {
         let api = TestApi::start().await;
         let r = send_row(&api, Some(Role::Admin), method, uri).await;

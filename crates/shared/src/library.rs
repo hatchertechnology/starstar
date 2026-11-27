@@ -36,10 +36,17 @@ pub struct LibraryFile {
     pub uploaded_at: i64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LibrarySort {
     #[default]
     Newest,
     Name,
     SlicedFor,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LibraryQuery {
+    pub q: Option<String>,
+    pub sort: Option<LibrarySort>,
 }

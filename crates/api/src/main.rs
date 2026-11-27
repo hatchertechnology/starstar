@@ -81,6 +81,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     library.reconcile().await?;
     let state = AppState {
         store: Arc::new(PrinterStore::from_db(db.clone())),
+        parts: Arc::new(starstar_api::library::parts::PartsStore::new(
+            db.pool().clone(),
+            library.blobs(),
+        )),
         library: Arc::new(library),
         auth: Arc::new(AuthStore::new(db.clone(), Clock::system(), hasher).await?),
         http: http_client()?,

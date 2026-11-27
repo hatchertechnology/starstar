@@ -1,5 +1,6 @@
 pub mod blobs;
 pub mod parse;
+pub mod parts;
 pub mod store;
 
 use crate::{AppState, auth::Caller, error::ApiError};

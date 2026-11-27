@@ -48,11 +48,15 @@ impl RealApi {
         // real clock, because tokens must expire in real time here.
         let state = rt.block_on(async {
             let db = Db::connect_test().await;
+            let library = Arc::new(
+                starstar_api::library::store::LibraryStore::temporary(db.pool().clone()).unwrap(),
+            );
             let state = AppState {
-                library: Arc::new(
-                    starstar_api::library::store::LibraryStore::temporary(db.pool().clone())
-                        .unwrap(),
-                ),
+                parts: Arc::new(starstar_api::library::parts::PartsStore::new(
+                    db.pool().clone(),
+                    library.blobs(),
+                )),
+                library,
                 store: Arc::new(PrinterStore::from_db(db.clone())),
                 auth: Arc::new(
                     AuthStore::new(db, Clock::system(), Hasher::fast_for_tests())

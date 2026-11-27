@@ -29,10 +29,14 @@ pub const TEST_START: i64 = 1_800_000_000;
 /// A fresh isolated PostgreSQL state with default config.
 pub async fn test_state() -> AppState {
     let db = Db::connect_test().await;
+    let library =
+        Arc::new(starstar_api::library::store::LibraryStore::temporary(db.pool().clone()).unwrap());
     AppState {
-        library: Arc::new(
-            starstar_api::library::store::LibraryStore::temporary(db.pool().clone()).unwrap(),
-        ),
+        parts: Arc::new(starstar_api::library::parts::PartsStore::new(
+            db.pool().clone(),
+            library.blobs(),
+        )),
+        library,
         store: Arc::new(PrinterStore::from_db(db.clone())),
         auth: Arc::new(
             AuthStore::new(db, Clock::manual(TEST_START), Hasher::fast_for_tests())

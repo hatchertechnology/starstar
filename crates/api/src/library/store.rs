@@ -6,6 +6,7 @@ use sqlx::{PgPool, Row};
 use starstar_shared::{LibraryFile, LibraryKind, LibrarySort};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, thiserror::Error)]
@@ -37,21 +38,24 @@ impl From<LibraryError> for crate::error::ApiError {
 }
 
 pub struct LibraryStore {
-    blobs: Blobs,
+    blobs: Arc<Blobs>,
     pool: PgPool,
 }
 impl LibraryStore {
     pub fn open(dir: &Path, pool: PgPool) -> Result<Self, StoreError> {
         Ok(Self {
-            blobs: Blobs::open(dir)?,
+            blobs: Arc::new(Blobs::open(dir)?),
             pool,
         })
     }
     pub fn temporary(pool: PgPool) -> Result<Self, StoreError> {
         Ok(Self {
-            blobs: Blobs::temporary()?,
+            blobs: Arc::new(Blobs::temporary()?),
             pool,
         })
+    }
+    pub fn blobs(&self) -> Arc<Blobs> {
+        self.blobs.clone()
     }
     pub fn blob_path(&self, f: &LibraryFile) -> PathBuf {
         self.blobs.path(&f.sha256)

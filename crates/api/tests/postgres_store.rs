@@ -35,10 +35,14 @@ async fn health_endpoint_returns_503_when_database_is_unavailable() {
         Duration::from_millis(150),
     )
     .unwrap();
+    let library =
+        Arc::new(starstar_api::library::store::LibraryStore::temporary(db.pool().clone()).unwrap());
     let state = AppState {
-        library: Arc::new(
-            starstar_api::library::store::LibraryStore::temporary(db.pool().clone()).unwrap(),
-        ),
+        parts: Arc::new(starstar_api::library::parts::PartsStore::new(
+            db.pool().clone(),
+            library.blobs(),
+        )),
+        library,
         store: Arc::new(PrinterStore::from_db(db.clone())),
         auth: Arc::new(
             AuthStore::connect_test(Clock::manual(common::TEST_START))

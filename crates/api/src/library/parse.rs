@@ -91,6 +91,7 @@ fn update_meta(
         if !matches!(
             key,
             "printer_model"
+                | "print_settings_id"
                 | "filament_type"
                 | "nozzle_diameter"
                 | "layer_height"
@@ -119,6 +120,10 @@ fn update_meta(
         }
         match key.trim() {
             "printer_model" => set!(printer_model, (!value.is_empty()).then(|| value.to_owned())),
+            "print_settings_id" => set!(
+                print_settings_id,
+                (!value.is_empty()).then(|| value.to_owned())
+            ),
             "filament_type" => set!(filament_type, (!value.is_empty()).then(|| value.to_owned())),
             "nozzle_diameter" => set!(nozzle_diameter, parse_finite(value)),
             "layer_height" => set!(layer_height, parse_finite(value)),
@@ -405,6 +410,27 @@ mod tests {
         let png = p.preview_png.unwrap();
         assert!(png.starts_with(b"\x89PNG"));
         assert_eq!(dimensions(&png), (380, 285));
+    }
+    #[test]
+    fn reads_print_settings_id_from_bgcode() {
+        let p = parse(CUBE, LibraryKind::Bgcode);
+        assert_eq!(
+            p.meta.print_settings_id.as_deref(),
+            Some("0.20mm SPEED @MK4IS 0.4")
+        );
+    }
+    #[test]
+    fn reads_print_settings_id_from_ascii() {
+        let p = parse(
+            b"; print_settings_id = 0.15mm QUALITY @MINI\n",
+            LibraryKind::Gcode,
+        );
+        assert_eq!(
+            p.meta.print_settings_id.as_deref(),
+            Some("0.15mm QUALITY @MINI")
+        );
+        let empty = parse(b"; print_settings_id = \n", LibraryKind::Gcode);
+        assert_eq!(empty.meta.print_settings_id, None);
     }
     #[test]
     fn parses_ascii_gcode_comments_and_thumbnail() {

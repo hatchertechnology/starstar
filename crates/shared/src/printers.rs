@@ -53,6 +53,8 @@ pub struct PrintMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub printer_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_settings_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nozzle_temp: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bed_temp: Option<f64>,

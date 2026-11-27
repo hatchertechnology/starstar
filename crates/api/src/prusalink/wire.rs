@@ -146,6 +146,7 @@ impl From<WireMeta> for PrintMeta {
             bed_temp: m.bed_temperature,
             filament_used_g: m.filament_used_g,
             filament_used_mm: m.filament_used_mm,
+            ..Default::default()
         }
     }
 }

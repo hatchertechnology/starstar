@@ -41,7 +41,19 @@ export function parseFolderQuery(q: LocationQuery): { storage?: string; segments
   return { storage: storage || undefined, segments: dir ? splitPath(dir) : [] }
 }
 
-/** API path for a library file or its content. */
+// legacy: removed in Task 12 (part page)
 export function libraryPath(id?: number, suffix?: 'preview' | 'download'): string {
   return ['/api/library', ...(id === undefined ? [] : [String(id)]), ...(suffix ? [suffix] : [])].join('/')
+}
+
+export function partsPath(id?: number, suffix?: 'revisions' | 'setups' | 'files' | 'match'): string {
+  return ['/api/parts', ...(id === undefined ? [] : [String(id)]), ...(suffix ? [suffix] : [])].join('/')
+}
+
+export function setupsPath(id: number, suffix?: 'revisions'): string {
+  return ['/api/setups', String(id), ...(suffix ? [suffix] : [])].join('/')
+}
+
+export function filesPath(id: number, suffix?: 'preview' | 'download'): string {
+  return ['/api/files', String(id), ...(suffix ? [suffix] : [])].join('/')
 }

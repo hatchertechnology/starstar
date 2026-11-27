@@ -143,6 +143,7 @@ export interface Camera {
   linked: boolean
 }
 
+// legacy: removed in Task 12 (part page)
 export type LibraryKind = 'bgcode' | 'gcode'
 export interface LibraryFile {
   id: number
@@ -157,3 +158,21 @@ export interface LibraryFile {
   uploaded_by: string
   uploaded_at: number
 }
+
+export type FileRole = 'source' | 'render' | 'project_3mf' | 'slice' | 'other'
+export type PrinterFamily = 'mk4' | 'mini'
+export interface SliceTarget { family: PrinterFamily | null; nozzle: number | null; profile: string | null }
+export interface PartFile {
+  id: number; part_id: number; model_revision_id: number | null; setup_revision_id: number | null
+  role: FileRole; name: string; sha256: string; size: number; meta: PrintMeta | null
+  parsed: boolean; has_preview: boolean; target: SliceTarget | null; superseded_by: number | null
+  note: string | null; uploaded_by: string; uploaded_at: number
+}
+export interface ModelRevision { id: number; number: number; note: string | null; created_by: string; created_at: number; files: PartFile[] }
+export interface SetupRevision { id: number; number: number; model_revision_id: number; model_revision_number: number; note: string | null; created_by: string; created_at: number; project: PartFile | null; slices: PartFile[] }
+export interface Setup { id: number; name: string; default_profile: string | null; revisions: SetupRevision[]; behind_model: string | null }
+export interface Part { id: number; name: string; notes: string | null; default_setup_id: number | null; created_by: string; created_at: number; preview_file_id: number | null; model_revisions: ModelRevision[]; setups: Setup[]; other_files: PartFile[] }
+export interface PartSummary { id: number; name: string; latest_model_revision: number; setups: number; slices: number; preview_file_id: number | null; updated_at: number }
+export type PartSort = 'newest' | 'name'
+export interface PartQuery { q: string | null; sort: PartSort | null }
+export interface PrinterMatch { printer: string; slice: PartFile | null; blocked: string | null; warnings: string[] }

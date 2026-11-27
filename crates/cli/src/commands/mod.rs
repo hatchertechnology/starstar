@@ -13,7 +13,7 @@ pub mod account;
 pub mod cameras;
 pub mod files;
 pub mod jobs;
-pub mod library;
+pub mod part;
 pub mod printers;
 pub mod update;
 pub mod users;
@@ -95,7 +95,7 @@ pub fn dispatch(cli: Cli, out: Output) -> CliResult<()> {
         Command::Apps(c) => users::run_apps(&ctx, c),
         Command::Update(c) => update::run(&ctx, c),
         Command::Camera(c) => cameras::run(&ctx, c),
-        Command::Library(c) => library::run(&ctx, c),
+        Command::Part(c) => part::run(&ctx, c),
         Command::Files(c) => files::run(&ctx, c),
         Command::Job(c) => jobs::run_job(&ctx, c),
         Command::Transfer(c) => jobs::run_transfer(&ctx, c),

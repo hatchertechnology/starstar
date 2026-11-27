@@ -103,4 +103,4 @@ Every command and flag: [references/commands.md](references/commands.md).
 
 ## Parts library
 
-The flat library API (`/api/library`) and the `library_list` / `library_info` MCP tools have been retired in favor of the parts library HTTP API (`/api/parts`, `/api/setups`, `/api/files`, `/api/parts/{id}/match`). The CLI (`starstar part`) and MCP (`part_*`) interfaces are not implemented yet, and the legacy `starstar library` CLI subcommands still point at the retired endpoints — do not use `starstar library`. Until the parts CLI and MCP tools land, upload and print files directly on printers with `starstar files upload` / `starstar files print` (or MCP `upload_file` / `start_print`).
+The flat library API (`/api/library`) and the `library_list` / `library_info` MCP tools have been retired in favor of the parts library HTTP API (`/api/parts`, `/api/setups`, `/api/files`, `/api/parts/{id}/match`). Use `starstar part` to manage parts and their files. The MCP (`part_*`) interface is not implemented yet. To print, use `starstar files upload` / `starstar files print` (or MCP `upload_file` / `start_print`).

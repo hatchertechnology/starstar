@@ -60,9 +60,9 @@ pub enum Command {
     /// Show and cancel a file transfer to the printer.
     #[command(subcommand)]
     Transfer(TransferCommand),
-    /// Manage files in the print library.
+    /// Manage parts and their files.
     #[command(subcommand)]
-    Library(LibraryCommand),
+    Part(PartCommand),
     /// List, inspect, upload, print and delete files on a printer.
     #[command(subcommand)]
     Files(FilesCommand),
@@ -197,35 +197,64 @@ pub enum TransferCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum LibraryCommand {
-    /// List library files.
+pub enum PartCommand {
+    /// List parts.
     Ls {
         #[arg(long)]
         search: Option<String>,
-        #[arg(long, value_parser = ["newest", "name", "sliced-for"])]
+        #[arg(long, value_parser = ["newest", "name"])]
         sort: Option<String>,
     },
-    /// Upload a sliced file.
+    /// Create a part.
+    New {
+        name: String,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Show a part and its revisions.
+    Info { part: String },
+    /// Delete a part. Needs --yes without a terminal.
+    Rm {
+        part: String,
+        #[command(flatten)]
+        confirm: ConfirmArgs,
+    },
+    /// Create a model revision.
+    Rev {
+        part: String,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        carry: Vec<i64>,
+    },
+    /// Create a setup.
+    Setup { part: String, name: String },
+    /// Upload a part file.
     Upload {
+        part: String,
         local: PathBuf,
+        #[arg(long, value_parser = ["source", "render", "project_3mf", "slice", "other"])]
+        role: Option<String>,
+        #[arg(long)]
+        setup: Option<String>,
+        #[arg(long)]
+        setup_rev: Option<i32>,
+        #[arg(long)]
+        model_rev: Option<i32>,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        replace: bool,
         #[arg(long)]
         name: Option<String>,
     },
-    /// Show a library file.
-    Info { id: i64 },
-    /// Download a library file.
+    /// Download a part file.
     Download {
         id: i64,
         #[arg(short, long)]
         output: Option<PathBuf>,
         #[arg(long)]
         force: bool,
-    },
-    /// Delete a library file. Needs --yes without a terminal.
-    Rm {
-        id: i64,
-        #[command(flatten)]
-        confirm: ConfirmArgs,
     },
 }
 

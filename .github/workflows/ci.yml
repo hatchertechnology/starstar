@@ -81,12 +81,18 @@ jobs:
           npm --prefix web run test:coverage
           sed -i 's|^SF:app/|SF:web/app/|' web/coverage/lcov.info
 
-      - name: Notice if SONAR_TOKEN is not configured
-        if: ${{ secrets.SONAR_TOKEN == '' }}
-        run: echo "::warning::SONAR_TOKEN secret is not set; skipping SonarQube Cloud scan"
+      - name: Check SONAR_TOKEN availability
+        id: sonar_check
+        env:
+          HAS_SONAR_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
+        run: |
+          echo "enabled=${HAS_SONAR_TOKEN}" >> "$GITHUB_OUTPUT"
+          if [ "${HAS_SONAR_TOKEN}" != "true" ]; then
+            echo "::warning::SONAR_TOKEN secret is not set; skipping SonarQube Cloud scan"
+          fi
 
       - name: SonarQube Cloud scan
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: steps.sonar_check.outputs.enabled == 'true'
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

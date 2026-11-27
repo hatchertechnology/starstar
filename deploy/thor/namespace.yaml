@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: starstar
+  labels:
+    app.kubernetes.io/name: starstar
+    # Pod Security Admission: every pod here (API and CNPG instances) must meet
+    # the "restricted" profile. CNPG 1.29 pods already do.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.34
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.34
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.34

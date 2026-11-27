@@ -1,0 +1,147 @@
+# Starstar API + generated web UI. One replica only: OAuth pending
+# authorizations, rate limiters and the setup code are in memory.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: starstar-api
+  namespace: starstar
+  labels:
+    app.kubernetes.io/name: starstar
+    app.kubernetes.io/component: api
+# The API never calls the Kubernetes API. No token, no Role, no RoleBinding.
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: starstar-api
+  namespace: starstar
+  labels:
+    app.kubernetes.io/name: starstar
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: starstar
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: starstar
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: starstar-api
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Kustomize replaces this with the pinned digest from kustomization.yaml.
+          image: ghcr.io/hatchertechnology/starstar
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: STARSTAR_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: starstar-pg-app
+                  key: uri
+            # Read by sqlx as defaults under the URL: require TLS and verify
+            # the CNPG server certificate and host name against the cluster CA.
+            - name: PGSSLMODE
+              value: verify-full
+            - name: PGSSLROOTCERT
+              valueFrom:
+                secretKeyRef:
+                  name: starstar-pg-ca
+                  key: ca.crt
+            - name: PGAPPNAME
+              value: starstar-api
+            - name: STARSTAR_BIND
+              value: 0.0.0.0:8080
+            - name: STARSTAR_PUBLIC_URL
+              value: https://starstar.tailb56d83.ts.net
+            # k3s cluster CIDR. Safe because NetworkPolicy starstar-api admits
+            # port 8080 from other pods only from the starstar Tailscale proxy
+            # pod. Policies are additive and node-local traffic is not
+            # filtered: see the runbook trust model before changing either.
+            - name: STARSTAR_TRUSTED_PROXIES
+              value: 10.42.0.0/16
+            # Bounds connect + retries + migrations together (the retry
+            # wrapper times out connect_inner, which runs migrations).
+            - name: STARSTAR_DB_CONNECT_TIMEOUT_SECS
+              value: "60"
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 45
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            # TCP, not /api/health: a database outage makes health return 503,
+            # and restarting the API would not fix the database.
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: starstar
+  namespace: starstar
+  labels:
+    app.kubernetes.io/name: starstar
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: starstar
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

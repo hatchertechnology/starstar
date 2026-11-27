@@ -1,0 +1,29 @@
+# Starstar on Thor (k3s). Apply with: kubectl --context thor apply -k deploy/thor/
+# Never use --prune and never `kubectl delete -k` this directory: deleting the
+# Cluster deletes its local-path PVC (reclaim policy Delete) and all data.
+# See README.md in this directory for the apply order and runbook.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: starstar
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: starstar
+    includeSelectors: false
+    includeTemplates: false
+
+resources:
+  - namespace.yaml
+  - networkpolicy.yaml
+  - database.yaml
+  - api.yaml
+  - ingress.yaml
+
+images:
+  # Set the digest that CI published for the commit being deployed:
+  #   sha256 from the publish workflow summary, or
+  #   docker buildx imagetools inspect ghcr.io/hatchertechnology/starstar:sha-<short>
+  # The all-zero digest is a placeholder; deploy/thor/preflight.sh refuses it.
+  - name: ghcr.io/hatchertechnology/starstar
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

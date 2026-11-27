@@ -1,0 +1,26 @@
+# Tailnet-only exposure at https://starstar.tailb56d83.ts.net. The Tailscale
+# operator terminates TLS (Let's Encrypt for the MagicDNS name) and proxies
+# HTTP to the Service with X-Forwarded-For set. No Funnel: not public.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: starstar
+  namespace: starstar
+  labels:
+    app.kubernetes.io/name: starstar
+    app.kubernetes.io/component: api
+spec:
+  ingressClassName: tailscale
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: starstar
+                port:
+                  number: 8080
+  tls:
+    - hosts:
+        - starstar

@@ -39,13 +39,9 @@ pub fn parse_file(path: &Path, kind: LibraryKind) -> io::Result<Parsed> {
             };
             file.seek(SeekFrom::Start(start))?;
             (&mut file).take(TAIL_LIMIT).read_to_end(&mut tail)?;
-            if !boundary {
-                if let Some(pos) = tail.iter().position(|&b| b == b'\n') {
-                    tail.drain(..=pos);
-                } else {
-                    tail.clear();
-                }
-            }
+            let mut extra = [0];
+            let at_eof = file.read(&mut extra)? == 0;
+            trim_tail(&mut tail, boundary, at_eof);
             if len > head.len() as u64 {
                 if let Some(pos) = head.iter().rposition(|&b| b == b'\n') {
                     head.truncate(pos + 1);
@@ -54,6 +50,23 @@ pub fn parse_file(path: &Path, kind: LibraryKind) -> io::Result<Parsed> {
                 }
             }
             Ok(parse_ascii(&head, &tail))
+        }
+    }
+}
+
+fn trim_tail(tail: &mut Vec<u8>, boundary: bool, at_eof: bool) {
+    if !boundary {
+        if let Some(pos) = tail.iter().position(|&b| b == b'\n') {
+            tail.drain(..=pos);
+        } else {
+            tail.clear();
+        }
+    }
+    if !at_eof && !tail.ends_with(b"\n") {
+        if let Some(pos) = tail.iter().rposition(|&b| b == b'\n') {
+            tail.truncate(pos + 1);
+        } else {
+            tail.clear();
         }
     }
 }
@@ -109,8 +122,8 @@ fn update_meta(
             "filament_type" => set!(filament_type, (!value.is_empty()).then(|| value.to_owned())),
             "nozzle_diameter" => set!(nozzle_diameter, parse_finite(value)),
             "layer_height" => set!(layer_height, parse_finite(value)),
-            "temperature" => set!(nozzle_temp, value.parse().ok()),
-            "bed_temperature" => set!(bed_temp, value.parse().ok()),
+            "temperature" => set!(nozzle_temp, parse_finite(value)),
+            "bed_temperature" => set!(bed_temp, parse_finite(value)),
             "filament used [g]" => set!(filament_used_g, parse_finite(value)),
             "filament used [mm]" => set!(filament_used_mm, parse_finite(value)),
             "estimated printing time (normal mode)" => {
@@ -149,17 +162,34 @@ fn parse_time(value: &str) -> Option<u64> {
 struct Previews {
     png: Vec<(u64, Vec<u8>)>,
     qoi: Vec<(u64, Vec<u8>)>,
+    retained: usize,
 }
 impl Previews {
     fn add(&mut self, bytes: &[u8], format: ImageFormat) {
-        let reader = image::ImageReader::with_format(Cursor::new(bytes), format);
-        let Ok((width, height)) = reader.into_dimensions() else {
-            return;
+        // Read only fixed headers here: constructing a PNG decoder can inflate
+        // ancillary chunks before decoder limits have been applied.
+        let dimensions = match format {
+            ImageFormat::Png
+                if bytes.len() >= 33
+                    && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+                    && bytes.get(8..16) == Some(b"\0\0\0\rIHDR") =>
+            {
+                bytes.get(16..24)
+            }
+            ImageFormat::Qoi if bytes.starts_with(b"qoif") => bytes.get(4..12),
+            _ => None,
         };
+        let Some(dims) = dimensions else { return };
+        let width = u32::from_be_bytes(dims[..4].try_into().unwrap());
+        let height = u32::from_be_bytes(dims[4..].try_into().unwrap());
         let area = u64::from(width) * u64::from(height);
         if width == 0 || height == 0 || width > 1024 || height > 1024 || area > 1_048_576 {
             return;
         }
+        if bytes.len() > 16 * 1024 * 1024 - self.retained {
+            return;
+        }
+        self.retained += bytes.len();
         let target = if format == ImageFormat::Png {
             &mut self.png
         } else {
@@ -173,7 +203,14 @@ impl Previews {
             (ImageFormat::Qoi, &mut self.qoi),
         ] {
             candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+            // Give each format a bounded allowance so invalid PNGs cannot starve QOI.
+            let mut decode_budget = 64 * 1024 * 1024usize;
             for (_, bytes) in candidates {
+                // Charge the full per-decoder allowance even on failed decodes.
+                let Some(remaining) = decode_budget.checked_sub(16 * 1024 * 1024) else {
+                    break;
+                };
+                decode_budget = remaining;
                 let mut reader = image::ImageReader::with_format(Cursor::new(&*bytes), format);
                 let mut limits = image::Limits::default();
                 limits.max_image_width = Some(1024);
@@ -250,6 +287,7 @@ fn parse_bgcode_inner(data: &[u8]) -> Option<Parsed> {
     let mut previews = Previews::default();
     let mut seen = HashSet::new();
     let mut budget = 16 * 1024 * 1024usize;
+    let mut thumbnail_budget = 16 * 1024 * 1024usize;
     loop {
         let start = pos;
         let kind = u16_at(data, pos)?;
@@ -291,8 +329,11 @@ fn parse_bgcode_inner(data: &[u8]) -> Option<Parsed> {
         if matches!(kind, 0 | 2 | 3 | 4) && matches!(compression, 0 | 1) {
             budget = budget.checked_sub(uncompressed)?;
         }
-        if kind == 5 && compression == 1 && uncompressed > 16 * 1024 * 1024 {
-            continue;
+        if kind == 5 && matches!(compression, 0 | 1) {
+            let Some(remaining) = thumbnail_budget.checked_sub(uncompressed) else {
+                continue;
+            };
+            thumbnail_budget = remaining;
         }
         let decoded = match compression {
             0 => content.to_vec(),
@@ -469,6 +510,9 @@ mod tests {
         let valid = png.into_inner();
         let mut huge_png = valid.clone();
         huge_png[16..20].copy_from_slice(&1025u32.to_be_bytes());
+        let mut crc = Crc::new();
+        crc.update(&huge_png[12..29]);
+        huge_png[29..33].copy_from_slice(&crc.sum().to_be_bytes());
         let mut qoi = Cursor::new(Vec::new());
         image::DynamicImage::new_rgba8(2, 2)
             .write_to(&mut qoi, ImageFormat::Qoi)
@@ -510,11 +554,81 @@ mod tests {
     #[test]
     fn invalid_values_do_not_mark_parsed() {
         let p = parse(
-            b"; nozzle_diameter = abc\n; layer_height = NaN\n",
+            b"; nozzle_diameter = abc\n; layer_height = NaN\n; temperature = NaN\n; bed_temperature = inf\n",
             LibraryKind::Gcode,
         );
         assert!(!p.parsed);
         assert_eq!(p.meta.layer_height, None);
+    }
+    #[test]
+    fn footer_end_requires_eof_or_newline() {
+        let mut tail = b"; filament_type = PLA\n; printer_model = PAR".to_vec();
+        trim_tail(&mut tail, true, false);
+        let p = parse_ascii(&[], &tail);
+        assert_eq!(p.meta.filament_type.as_deref(), Some("PLA"));
+        assert!(p.meta.printer_model.is_none());
+        let mut final_line = b"; printer_model = COMPLETE".to_vec();
+        trim_tail(&mut final_line, true, true);
+        assert_eq!(
+            parse_ascii(&[], &final_line).meta.printer_model.as_deref(),
+            Some("COMPLETE")
+        );
+    }
+    #[test]
+    fn head_boundary_rejects_partial_thumbnail_end() {
+        let mut png = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut png, ImageFormat::Png)
+            .unwrap();
+        let mut input = format!(
+            "; thumbnail begin 2x2 0\n; {}\n",
+            STANDARD.encode(png.into_inner())
+        )
+        .into_bytes();
+        input.resize(HEAD_LIMIT as usize - 16, b' ');
+        input.extend_from_slice(b"\n; thumbnail end and more\n");
+        assert!(parse(&input, LibraryKind::Gcode).preview_png.is_none());
+    }
+    #[test]
+    fn thumbnail_budgets_bound_retention_and_decodes() {
+        let mut previews = Previews::default();
+        let mut png = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut png, ImageFormat::Png)
+            .unwrap();
+        let bytes = png.into_inner();
+        let mut large = bytes.clone();
+        large.resize(16 * 1024 * 1024, 0);
+        previews.add(&large, ImageFormat::Png);
+        previews.add(&bytes, ImageFormat::Png);
+        assert_eq!(previews.png.len(), 1);
+        let payload = vec![0; 1024 * 1024];
+        let zipped = compressed(&payload);
+        let mut blocks = vec![block(0, 0, 17, b"printer_model=MK4", 0)];
+        blocks.extend(vec![block(5, 1, payload.len(), &zipped, 0); 17]);
+        assert!(parse(&bg(&blocks), LibraryKind::Bgcode).parsed);
+        let mut invalid = bytes.clone();
+        invalid.truncate(24);
+        let mut candidates = Previews::default();
+        for _ in 0..4 {
+            candidates.add(&invalid, ImageFormat::Png);
+        }
+        candidates.add(&bytes, ImageFormat::Png);
+        assert_eq!(dimensions(&candidates.finish().unwrap()), (2, 2));
+
+        // Even structurally complete PNGs can fail decoding; reserve work for QOI.
+        let mut corrupt = bytes.clone();
+        corrupt[29] ^= 1;
+        let mut qoi = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut qoi, ImageFormat::Qoi)
+            .unwrap();
+        let mut candidates = Previews::default();
+        for _ in 0..4 {
+            candidates.add(&corrupt, ImageFormat::Png);
+        }
+        candidates.add(&qoi.into_inner(), ImageFormat::Qoi);
+        assert_eq!(dimensions(&candidates.finish().unwrap()), (2, 2));
     }
     #[test]
     fn kind_from_name() {

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 pub const APP_NAME: &str = "starstar";
 
 /// Address of the starstar API when none is configured.
-pub const DEFAULT_API_URL: &str = "http://127.0.0.1:8080";
+pub const DEFAULT_API_URL: &str = "http://starstar";
 
 /// Printer models the API can manage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,11 +1,11 @@
 # starstar MCP server
 
-The API serves MCP over streamable HTTP at `<public_url>/mcp` (`STARSTAR_PUBLIC_URL` on the server, default `http://127.0.0.1:8080`).
+The API serves MCP over streamable HTTP at `<public_url>/mcp` (default `http://starstar/mcp`, configured on the server with `STARSTAR_PUBLIC_URL`).
 
 ## Connect
 
 ```sh
-claude mcp add --transport http starstar <public_url>/mcp
+claude mcp add --transport http starstar http://starstar/mcp
 ```
 
 Then authenticate from the client (in Claude Code, `/mcp`). A browser opens for the OAuth sign-in and consent page; the client gets a token limited to the role you pick. Choose **operator** for an agent. `tools/list` only shows tools the token's role may call, and a call above the role fails.

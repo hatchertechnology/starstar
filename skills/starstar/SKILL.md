@@ -28,7 +28,7 @@ cargo install --git https://github.com/hatchertechnology/starstar starstar-cli -
 cargo install --path crates/cli --locked
 ```
 
-The binary is `starstar`. Point it at the server with `--api-url` or `STARSTAR_API_URL` (default `http://127.0.0.1:8080`). `starstar status` checks the API is reachable.
+The binary is `starstar`. Point it at the server with `--api-url` or `STARSTAR_API_URL` (default `http://starstar`). `starstar status` checks the API is reachable.
 
 ## Sign in
 
@@ -92,7 +92,7 @@ Poll `job show --json` every minute or so, not in a tight loop. `job pause`, `jo
 If the agent supports MCP, connect the server rather than the CLI:
 
 ```sh
-claude mcp add --transport http starstar <public_url>/mcp
+claude mcp add --transport http starstar http://starstar/mcp
 ```
 
 The OAuth sign-in happens in the browser; tools are listed per role. See [references/mcp.md](references/mcp.md). The same safety rules apply: `start_print`, `stop_job`, `delete_file`, `remove_printer` and `apply_update` need the user's go-ahead, and `pause_job`, `resume_job`, `cancel_transfer` only when asked.

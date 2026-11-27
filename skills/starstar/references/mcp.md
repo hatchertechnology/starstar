@@ -1,6 +1,10 @@
 # starstar MCP server
 
-The API serves MCP over streamable HTTP at `<public_url>/mcp`. The server public URL defaults to `http://127.0.0.1:8080` and is configured with `STARSTAR_PUBLIC_URL`. For this deployment, the configured endpoint is `http://starstar/mcp`. The CLI API URL separately defaults to `http://starstar`.
+The configured MCP endpoint for this deployment is `http://starstar/mcp` over streamable HTTP.
+
+Thor’s configured public origin gives the endpoint `https://starstar.tailb56d83.ts.net/mcp`.
+
+The server uses `<public_url>/mcp`, with `STARSTAR_PUBLIC_URL` defaulting to `http://127.0.0.1:8080`. The CLI API URL separately defaults to `http://starstar`.
 
 ## Connect
 

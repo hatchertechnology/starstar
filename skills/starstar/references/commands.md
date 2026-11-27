@@ -134,7 +134,7 @@ Usage: starstar part upload [OPTIONS] <PART> <LOCAL>
       --profile <PROFILE>
       --replace
       --name <NAME>
-Other files without --model-rev stay at part level.
+When --role is omitted, the role is inferred from the file name extension (using --name if supplied); an unrecognized extension needs --role. Slices and .3mf projects need --setup; --setup-rev requires --setup. Other files without --model-rev stay at part level.
 
 === part download
 Usage: starstar part download [OPTIONS] <ID>

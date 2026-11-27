@@ -26,4 +26,4 @@ images:
   #   docker buildx imagetools inspect ghcr.io/hatchertechnology/starstar:sha-<short>
   # The all-zero digest is a placeholder; deploy/thor/preflight.sh refuses it.
   - name: ghcr.io/hatchertechnology/starstar
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    digest: sha256:256efb715ec509c420dac39ac719cf0cd6d6aa51ead991361e00eef3daab9fd3

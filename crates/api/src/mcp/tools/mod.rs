@@ -8,7 +8,6 @@ use super::StarstarMcp;
 mod cameras;
 mod files;
 mod jobs;
-mod library;
 mod printers;
 
 pub(crate) fn all_tools() -> ToolRouter<StarstarMcp> {
@@ -16,7 +15,6 @@ pub(crate) fn all_tools() -> ToolRouter<StarstarMcp> {
         + StarstarMcp::job_tools()
         + StarstarMcp::file_tools()
         + StarstarMcp::camera_tools()
-        + StarstarMcp::library_tools()
 }
 
 /// The description of `upload_file`, with the limit this server is set to.

@@ -250,8 +250,6 @@ fn names(list: &[&str]) -> std::collections::BTreeSet<String> {
 }
 
 const VIEWER_TOOLS: &[&str] = &[
-    "library_list",
-    "library_info",
     "list_printers",
     "get_printer",
     "printer_info",
@@ -310,7 +308,7 @@ async fn tools_list_per_role() {
     assert_eq!(listed(Role::Operator).await, names(&operator));
     let all = listed(Role::Admin).await;
     assert_eq!(all, names(&admin));
-    assert_eq!(all.len(), 34);
+    assert_eq!(all.len(), 32);
 
     let t = token(&api, Role::Operator).await;
     let r = post_mcp(&api, Some(&t), HOST, rpc_body("tools/list", json!({}))).await;

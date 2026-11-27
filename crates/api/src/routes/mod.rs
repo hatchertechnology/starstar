@@ -11,7 +11,7 @@ use crate::error::ApiError;
 
 mod cameras;
 mod files;
-mod library;
+mod parts;
 mod printers;
 
 pub fn router(state: AppState) -> Router {
@@ -19,7 +19,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .merge(printers::router())
         .merge(files::router())
-        .merge(library::router())
+        .merge(parts::router())
         .merge(cameras::router())
         .with_state(state)
 }

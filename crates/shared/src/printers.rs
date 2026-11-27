@@ -110,6 +110,9 @@ pub struct FileEntry {
     pub modified: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<PrintMeta>,
+    /// The printer has a preview image for this file.
+    #[serde(default)]
+    pub has_thumbnail: bool,
     /// Present only for folders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<FileEntry>>,

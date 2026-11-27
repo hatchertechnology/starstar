@@ -661,6 +661,7 @@ pub fn entry(name: &str, kind: FileKind, size: Option<u64>) -> FileEntry {
         size,
         modified: None,
         meta: None,
+        has_thumbnail: false,
         children: None,
     }
 }

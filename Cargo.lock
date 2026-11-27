@@ -2494,6 +2494,7 @@ dependencies = [
  "getrandom 0.3.4",
  "ipnet",
  "md-5",
+ "percent-encoding",
  "reqwest",
  "rmcp",
  "serde",

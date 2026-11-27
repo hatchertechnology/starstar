@@ -512,6 +512,37 @@ impl PrusaLinkClient {
             .await
     }
 
+    /// A file's preview image from a `refs` link such as `/thumb/l/usb/X.BGC`.
+    pub async fn thumbnail(&self, link: &str) -> Result<(String, Bytes), PrusaError> {
+        let url = self.thumbnail_url(link)?;
+        let response = self.send(Method::GET, url, HeaderMap::new(), None).await?;
+        Self::image(response).await
+    }
+
+    /// Accepts only an absolute path on this printer: no scheme, host, query,
+    /// empty or `.`/`..` segments. Each segment is decoded, then encoded once.
+    fn thumbnail_url(&self, link: &str) -> Result<reqwest::Url, PrusaError> {
+        let refuse = || PrusaError::Decode(format!("refusing thumbnail link `{link}`"));
+        let rest = link.strip_prefix('/').ok_or_else(refuse)?;
+        if rest.starts_with('/') || link.contains(['?', '#', '\\']) {
+            return Err(refuse());
+        }
+        let segments = rest
+            .split('/')
+            .map(|s| {
+                percent_encoding::percent_decode_str(s)
+                    .decode_utf8()
+                    .map(|d| d.into_owned())
+                    .map_err(|_| refuse())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if segments.iter().any(String::is_empty) {
+            return Err(refuse());
+        }
+        let refs: Vec<&str> = segments.iter().map(String::as_str).collect();
+        self.endpoint(&refs).map_err(|_| refuse())
+    }
+
     async fn image(response: reqwest::Response) -> Result<(String, Bytes), PrusaError> {
         let content_type = response
             .headers()
@@ -545,6 +576,7 @@ mod tests {
 
     use super::*;
     use crate::error::ApiError;
+    use starstar_shared::FileEntry;
 
     fn status_of(e: PrusaError) -> StatusCode {
         ApiError::from(e).into_response().status()
@@ -589,6 +621,59 @@ mod tests {
                 .unwrap()
                 .path(),
             "/api/v1/files/usb/"
+        );
+    }
+
+    #[test]
+    fn wire_file_maps_has_thumbnail() {
+        let file = |v: serde_json::Value| serde_json::from_value::<WireFile>(v).unwrap();
+        let thumb = file(serde_json::json!({
+            "name": "CUBE12~1.BGC", "type": "PRINT_FILE",
+            "refs": {"thumbnail": "/thumb/l/usb/CUBE12~1.BGC"}
+        }));
+        assert_eq!(thumb.thumbnail_ref(), Some("/thumb/l/usb/CUBE12~1.BGC"));
+        assert!(FileEntry::from(thumb).has_thumbnail);
+
+        let icon = file(serde_json::json!({
+            "name": "X", "type": "PRINT_FILE", "refs": {"icon": "/thumb/s/usb/X"}
+        }));
+        assert_eq!(icon.thumbnail_ref(), Some("/thumb/s/usb/X"));
+        assert!(FileEntry::from(icon).has_thumbnail);
+
+        let none = file(serde_json::json!({"name": "X", "type": "PRINT_FILE"}));
+        assert_eq!(none.thumbnail_ref(), None);
+        assert!(!FileEntry::from(none).has_thumbnail);
+
+        let download_only = file(serde_json::json!({
+            "name": "X", "type": "PRINT_FILE", "refs": {"download": "/usb/X"}
+        }));
+        assert!(!FileEntry::from(download_only).has_thumbnail);
+    }
+
+    #[test]
+    fn thumbnail_link_rejects_unsafe() {
+        let c = client();
+        for link in [
+            "http://evil/x.png",
+            "//evil/x.png",
+            "/thumb/../api/v1/status",
+            "/thumb/l/x?y=1",
+            "thumb/l/x",
+            "/thumb//x",
+        ] {
+            assert!(c.thumbnail_url(link).is_err(), "accepted {link}");
+        }
+        assert_eq!(
+            c.thumbnail_url("/thumb/l/usb/CUBE12~1.BGC")
+                .unwrap()
+                .as_str(),
+            "http://10.0.0.5:8080/thumb/l/usb/CUBE12~1.BGC"
+        );
+        assert_eq!(
+            c.thumbnail_url("/thumb/l/usb/My%20Parts/a.bgc")
+                .unwrap()
+                .path(),
+            "/thumb/l/usb/My%20Parts/a.bgc"
         );
     }
 

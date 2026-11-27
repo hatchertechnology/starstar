@@ -265,10 +265,33 @@ pub struct WireFile {
     pub meta: Option<serde_json::Value>,
     #[serde(default)]
     pub children: Option<Vec<WireFile>>,
+    #[serde(default)]
+    pub refs: Option<WireRefs>,
+}
+
+/// Links PrusaLink gives for a file: paths on the same printer.
+#[derive(Debug, Default, Deserialize)]
+pub struct WireRefs {
+    #[serde(default)]
+    pub thumbnail: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+impl WireFile {
+    /// The preview image link: the large thumbnail, else the icon.
+    pub fn thumbnail_ref(&self) -> Option<&str> {
+        let refs = self.refs.as_ref()?;
+        refs.thumbnail
+            .as_deref()
+            .or(refs.icon.as_deref())
+            .filter(|s| !s.is_empty())
+    }
 }
 
 impl From<WireFile> for FileEntry {
     fn from(f: WireFile) -> Self {
+        let has_thumbnail = f.thumbnail_ref().is_some();
         let kind = match f.kind.as_str() {
             "PRINT_FILE" => FileKind::PrintFile,
             "FIRMWARE" => FileKind::Firmware,
@@ -298,6 +321,7 @@ impl From<WireFile> for FileEntry {
             size: f.size,
             modified: f.m_timestamp,
             meta,
+            has_thumbnail,
             children,
         }
     }

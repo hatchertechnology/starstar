@@ -40,6 +40,16 @@ export interface ConsentRequest {
 export interface ErrorBody { error: string }
 
 export type PrinterKind = 'mk4' | 'mini'
+export interface PrinterInfo {
+  name: string
+  kind: PrinterKind
+  firmware: string
+  api_version: string
+  hostname?: string | null
+  serial?: string | null
+  nozzle_diameter?: number | null
+  mmu?: boolean | null
+}
 export interface PrinterSummary { name: string; kind: PrinterKind; host: string; username: string }
 export interface PrinterStatus {
   name: string
@@ -117,6 +127,7 @@ export interface FileEntry {
   size?: number | null
   modified?: number | null
   meta?: PrintMeta | null
+  has_thumbnail?: boolean
   children?: FileEntry[] | null
 }
 

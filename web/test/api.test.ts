@@ -18,9 +18,11 @@ describe('createApi', () => {
   it('sends csrf on unsafe methods only', async () => {
     const { api, calls } = setup(() => new Response(null, { status: 204 }))
     await api('/api/x')
+    await api('/api/x', { method: 'HEAD' })
     for (const m of ['PUT', 'POST', 'PATCH', 'DELETE'] as const) await api('/api/x', { method: m })
     expect(hdr(calls[0]!, 'x-csrf-token')).toBeNull()
-    for (const c of calls.slice(1)) expect(hdr(c, 'x-csrf-token')).toBe('ss_cs_x')
+    expect(hdr(calls[1]!, 'x-csrf-token')).toBeNull()
+    for (const c of calls.slice(2)) expect(hdr(c, 'x-csrf-token')).toBe('ss_cs_x')
     expect(calls[0]!.init.credentials).toBe('same-origin')
     expect(hdr(calls[0]!, 'accept')).toBe('application/json')
   })
@@ -64,6 +66,12 @@ describe('createApi', () => {
     const b = await api<Blob>('/api/x', { as: 'blob' })
     expect(b!.size).toBe(3)
     expect(b!.type).toBe('image/png')
+  })
+  it('returns the response headers when as=headers', async () => {
+    const { api, calls } = setup(() => new Response(null, { status: 200, headers: { 'currently-printed': 'true' } }))
+    const h = await api<Headers>('/api/x', { method: 'HEAD', as: 'headers' })
+    expect(h!.get('currently-printed')).toBe('true')
+    expect(calls[0]!.init.method).toBe('HEAD')
   })
   it('serialises query and json bodies', async () => {
     const { api, calls } = setup(() => new Response(null, { status: 204 }))

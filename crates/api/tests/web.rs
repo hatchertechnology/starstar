@@ -122,6 +122,8 @@ async fn spa_fallback_for_client_routes() {
         "/consent?request=abc",
         "/login?next=%2Fconsent%3Frequest%3Dabc",
         "/users",
+        "/printers/mk4/files/usb/cube-12mm.bgcode",
+        "/printers/mk4/files/usb/My%20Parts/caf%C3%A9%20%231%3F%25.gcode",
     ] {
         let r = get(&app, uri).await;
         assert_eq!(r.status, 200, "{uri}");

@@ -5,14 +5,14 @@ export class ApiRequestError extends Error {
   }
 }
 
-export type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+export type Method = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 export interface RequestOptions {
   method?: Method
   json?: unknown
   query?: Record<string, string | boolean | undefined>
   signal?: AbortSignal
-  as?: 'json' | 'blob'
+  as?: 'json' | 'blob' | 'headers'
   skipUnauthorizedHook?: boolean
 }
 
@@ -52,7 +52,7 @@ export function createApi(deps: ApiDeps): Api {
       headers.set('Content-Type', 'application/json')
       body = JSON.stringify(opts.json)
     }
-    if (method !== 'GET') {
+    if (method !== 'GET' && method !== 'HEAD') {
       const token = deps.csrf()
       if (token) headers.set('X-CSRF-Token', token)
     }
@@ -77,6 +77,7 @@ export function createApi(deps: ApiDeps): Api {
       if (res.status === 401 && !opts.skipUnauthorizedHook) deps.onUnauthorized()
       throw new ApiRequestError(res.status, await failure(res))
     }
+    if (opts.as === 'headers') return res.headers as T
     if (res.status === 204) return null
     if (opts.as === 'blob') return (await res.blob()) as T
     const text = await res.text()

@@ -100,3 +100,7 @@ The OAuth sign-in happens in the browser; tools are listed per role. See [refere
 ## Reference
 
 Every command and flag: [references/commands.md](references/commands.md).
+
+## Library
+
+Upload sliced files with `starstar library upload <local>` and find them with `starstar library ls` (optionally `--search` or `--sort`). Use `library info`, `download`, and `rm` to inspect, retrieve, or delete a file. MCP provides `library_list` and `library_info`. Batch printing arrives in phase 2.

@@ -274,6 +274,13 @@ impl ApiClient {
         Ok(Some((content_type, bytes.to_vec())))
     }
 
+    /// Streams a successful response into a writer, including detecting truncated bodies.
+    pub fn download_to(&self, ep: &Endpoint, target: &mut impl std::io::Write) -> CliResult<u64> {
+        let mut response = self.plain(ep)?;
+        std::io::copy(&mut response, target)
+            .map_err(|e| CliError::Other(format!("could not read the download: {e}")))
+    }
+
     pub fn head(&self, ep: &Endpoint) -> CliResult<HeaderMap> {
         Ok(self.plain(ep)?.headers().clone())
     }

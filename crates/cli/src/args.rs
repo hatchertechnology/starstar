@@ -60,6 +60,9 @@ pub enum Command {
     /// Show and cancel a file transfer to the printer.
     #[command(subcommand)]
     Transfer(TransferCommand),
+    /// Manage files in the print library.
+    #[command(subcommand)]
+    Library(LibraryCommand),
     /// List, inspect, upload, print and delete files on a printer.
     #[command(subcommand)]
     Files(FilesCommand),
@@ -190,6 +193,39 @@ pub enum TransferCommand {
         /// Transfer id. Without it, the current transfer is looked up first.
         #[arg(long)]
         id: Option<u64>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LibraryCommand {
+    /// List library files.
+    Ls {
+        #[arg(long)]
+        search: Option<String>,
+        #[arg(long, value_parser = ["newest", "name", "sliced-for"])]
+        sort: Option<String>,
+    },
+    /// Upload a sliced file.
+    Upload {
+        local: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Show a library file.
+    Info { id: i64 },
+    /// Download a library file.
+    Download {
+        id: i64,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Delete a library file. Needs --yes without a terminal.
+    Rm {
+        id: i64,
+        #[command(flatten)]
+        confirm: ConfirmArgs,
     },
 }
 

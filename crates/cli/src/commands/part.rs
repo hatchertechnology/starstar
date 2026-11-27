@@ -21,20 +21,43 @@ fn ep(method: Method, segments: &[&str]) -> Endpoint {
     }
 }
 fn resolve(ctx: &Ctx, part: &str) -> CliResult<i64> {
-    if let Ok(id) = part.parse::<i64>() {
-        return Ok(id);
+    if let Some(id) = part.strip_prefix("id:") {
+        return id
+            .parse::<i64>()
+            .map_err(|_| CliError::Usage(format!("invalid part ID {id:?}")));
     }
+    let explicit_name = part.strip_prefix("name:");
+    let name = explicit_name.unwrap_or(part);
+    let numeric_id = if explicit_name.is_none()
+        && !name.is_empty()
+        && name.bytes().all(|b| b.is_ascii_digit())
+    {
+        Some(
+            name.parse::<i64>()
+                .map_err(|_| CliError::Usage(format!("invalid part ID {name:?}")))?,
+        )
+    } else {
+        None
+    };
     let mut e = ep(Method::GET, &["parts"]);
-    e.query.push(("q", part.to_owned()));
+    e.query.push(("q", name.to_owned()));
     let matches: Vec<PartSummary> = ctx.client()?.get_json(&e)?;
     let matches: Vec<_> = matches
         .iter()
-        .filter(|p| p.name.to_lowercase() == part.to_lowercase())
+        .filter(|p| p.name.to_lowercase() == name.to_lowercase())
         .collect();
+    if let Some(id) = numeric_id {
+        if matches.iter().any(|p| p.id != id) {
+            return Err(CliError::Usage(format!(
+                "ambiguous part {part}: use id:{part} or name:{part}"
+            )));
+        }
+        return Ok(id);
+    }
     match matches.as_slice() {
         [p] => Ok(p.id),
-        [] => Err(CliError::Usage(format!("part {part:?} not found"))),
-        _ => Err(CliError::Usage(format!("part name {part:?} is ambiguous"))),
+        [] => Err(CliError::Usage(format!("part {name:?} not found"))),
+        _ => Err(CliError::Usage(format!("part name {name:?} is ambiguous"))),
     }
 }
 fn tree(ctx: &Ctx, id: i64) -> CliResult<Part> {
@@ -77,6 +100,7 @@ fn render_tree(p: &Part) -> String {
                 .map(|x| format!(" [behind: {x}]"))
                 .unwrap_or_default()
         ));
+        let newest = setup.revisions.iter().map(|r| r.number).max();
         for rev in &setup.revisions {
             lines.push(format!(
                 "  revision {} (ID {}, model rev {})",
@@ -108,11 +132,18 @@ fn render_tree(p: &Part) -> String {
                     .and_then(|x| x.estimated_print_time)
                     .map_or_else(|| "-".into(), duration);
                 lines.push(format!(
-                    "    {} {family} {nozzle} {profile} {filament} {time}{}",
+                    "    {} {family} {nozzle} {profile} {filament} {time}{}{}",
                     f.id,
-                    f.superseded_by
-                        .map(|id| format!(" [superseded by {id}]"))
-                        .unwrap_or_default()
+                    if Some(rev.number) != newest {
+                        format!(" [from r{}]", rev.number)
+                    } else {
+                        String::new()
+                    },
+                    if f.superseded_by.is_some() {
+                        " [replaced]"
+                    } else {
+                        ""
+                    }
                 ));
             }
         }
@@ -154,8 +185,15 @@ pub fn run(ctx: &Ctx, command: PartCommand) -> CliResult<()> {
             )?;
             ctx.out.emit_value(&p, || render_tree(&p));
         }
-        PartCommand::Info { part } => {
-            let p = tree(ctx, resolve(ctx, &part)?)?;
+        PartCommand::Info { part, all } => {
+            let mut p = tree(ctx, resolve(ctx, &part)?)?;
+            if !all {
+                for setup in &mut p.setups {
+                    for rev in &mut setup.revisions {
+                        rev.slices.retain(|file| file.superseded_by.is_none());
+                    }
+                }
+            }
             ctx.out.emit_value(&p, || render_tree(&p));
         }
         PartCommand::Rm { part, confirm } => {
@@ -247,15 +285,14 @@ pub fn run(ctx: &Ctx, command: PartCommand) -> CliResult<()> {
                         .iter()
                         .find(|s| s.name == name)
                         .ok_or_else(|| CliError::Usage(format!("setup {name:?} not found")))?;
-                    if role == FileRole::Project3mf && setup_rev.is_none() {
-                        e.query.push(("setup", s.id.to_string()));
-                    } else {
-                        let r = match setup_rev {
-                            Some(n) => s.revisions.iter().find(|r| r.number == n),
-                            None => s.revisions.iter().max_by_key(|r| r.number),
-                        }
-                        .ok_or_else(|| CliError::Usage("setup revision not found".into()))?;
+                    if let Some(n) = setup_rev {
+                        let r =
+                            s.revisions.iter().find(|r| r.number == n).ok_or_else(|| {
+                                CliError::Usage("setup revision not found".into())
+                            })?;
                         e.query.push(("setup_revision", r.id.to_string()));
+                    } else {
+                        e.query.push(("setup", s.id.to_string()));
                     }
                 }
             }

@@ -16,6 +16,11 @@ fn setup() -> (FakeApi, tempfile::TempDir) {
         Canned::json(200, vec![summary(7, "cube")]),
     );
     f.set("GET", "/api/parts/7", Canned::json(200, tree()));
+    f.set(
+        "GET",
+        "/api/parts?q=7",
+        Canned::json(200, Vec::<serde_json::Value>::new()),
+    );
     (f, tempfile::tempdir().unwrap())
 }
 fn tok(f: &FakeApi, h: &std::path::Path) -> std::process::Command {
@@ -37,7 +42,7 @@ fn upload_slice_resolves_setup_name() {
     std::fs::write(&p, b"abc").unwrap();
     f.set(
         "POST",
-        "/api/parts/7/files?name=cube.gcode&role=slice&setup_revision=13",
+        "/api/parts/7/files?name=cube.gcode&role=slice&setup=12",
         Canned::json(201, json!({})),
     );
     let o = run(tok(&f, h.path())
@@ -45,14 +50,13 @@ fn upload_slice_resolves_setup_name() {
         .arg(&p)
         .args(["--setup", "standard"]));
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(
-        f.find(
-            "POST",
-            "/api/parts/7/files?name=cube.gcode&role=slice&setup_revision=13"
-        )
-        .len(),
-        1
+    let requests = f.find(
+        "POST",
+        "/api/parts/7/files?name=cube.gcode&role=slice&setup=12",
     );
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body, b"abc");
+    assert_eq!(requests[0].header("content-length"), Some("3"));
 }
 #[test]
 fn upload_infers_role() {
@@ -157,4 +161,94 @@ fn download_preserves_existing_file_and_checks_size() {
         .arg(&path));
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(std::fs::read(path).unwrap(), b"abc");
+}
+
+#[test]
+fn numeric_part_names_require_explicit_disambiguation_before_delete() {
+    let (f, h) = setup();
+    f.set(
+        "GET",
+        "/api/parts?q=42",
+        Canned::json(200, vec![summary(7, "42")]),
+    );
+    let o = run(tok(&f, h.path()).args(["part", "rm", "42", "--yes"]));
+    assert_ne!(o.code, 0);
+    assert!(
+        o.stderr.contains("ambiguous part 42: use id:42 or name:42"),
+        "{}",
+        o.stderr
+    );
+    assert!(f.find("DELETE", "/api/parts/42").is_empty());
+    let o = run(tok(&f, h.path()).args(["part", "info", "name:42"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let o = run(tok(&f, h.path()).args(["part", "info", "id:7"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    f.set(
+        "GET",
+        "/api/parts?q=7",
+        Canned::json(200, vec![summary(7, "7")]),
+    );
+    let o = run(tok(&f, h.path()).args(["part", "info", "7"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+}
+
+#[test]
+fn info_marks_old_slices_and_filters_replaced_unless_all() {
+    let (f, h) = setup();
+    let mut p = tree();
+    let slice = |id, superseded| json!({"id":id,"part_id":7,"model_revision_id":null,"setup_revision_id":13,"role":"slice","name":"cube.gcode","sha256":"abc","size":3,"meta":null,"parsed":false,"has_preview":false,"target":null,"superseded_by":superseded,"note":null,"uploaded_by":"test","uploaded_at":1});
+    p["setups"][0]["revisions"][0]["slices"] =
+        json!([slice(101, None::<i64>), slice(102, Some(103))]);
+    let mut newest = p["setups"][0]["revisions"][0].clone();
+    newest["id"] = json!(14);
+    newest["number"] = json!(2);
+    newest["slices"] = json!([slice(103, None::<i64>)]);
+    p["setups"][0]["revisions"]
+        .as_array_mut()
+        .unwrap()
+        .push(newest);
+    f.set("GET", "/api/parts/7", Canned::json(200, p));
+    let o = run(tok(&f, h.path()).args(["part", "info", "id:7"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stdout
+            .lines()
+            .any(|s| s.contains("101 ") && s.contains("from r1")),
+        "{}",
+        o.stdout
+    );
+    assert!(!o.stdout.contains("102 "));
+    assert!(o.stdout.contains("103 "));
+    let o = run(tok(&f, h.path()).args(["part", "info", "id:7", "--all"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stdout
+            .lines()
+            .any(|s| s.contains("102 ") && s.contains("replaced") && s.contains("from r1")),
+        "{}",
+        o.stdout
+    );
+    let o = run(tok(&f, h.path()).args(["part", "info", "id:7", "--json"]));
+    assert_eq!(
+        o.json()["setups"][0]["revisions"][0]["slices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn explicit_setup_revision_is_resolved() {
+    let (f, h) = setup();
+    let p = h.path().join("cube.gcode");
+    std::fs::write(&p, b"abc").unwrap();
+    let path = "/api/parts/7/files?name=cube.gcode&role=slice&setup_revision=13";
+    f.set("POST", path, Canned::json(201, json!({})));
+    let o = run(tok(&f, h.path())
+        .args(["part", "upload", "id:7"])
+        .arg(&p)
+        .args(["--setup", "standard", "--setup-rev", "1"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(f.find("POST", path).len(), 1);
 }

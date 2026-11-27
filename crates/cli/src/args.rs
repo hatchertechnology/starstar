@@ -61,6 +61,9 @@ pub enum Command {
     #[command(subcommand)]
     Transfer(TransferCommand),
     /// Manage parts and their files.
+    ///
+    /// Identify parts by name, ID, name:X, or id:N. A numeric name that differs
+    /// from the matching ID requires an explicit prefix.
     #[command(subcommand)]
     Part(PartCommand),
     /// List, inspect, upload, print and delete files on a printer.
@@ -212,7 +215,12 @@ pub enum PartCommand {
         notes: Option<String>,
     },
     /// Show a part and its revisions.
-    Info { part: String },
+    Info {
+        part: String,
+        /// Include replaced slices.
+        #[arg(long)]
+        all: bool,
+    },
     /// Delete a part. Needs --yes without a terminal.
     Rm {
         part: String,
@@ -229,7 +237,7 @@ pub enum PartCommand {
     },
     /// Create a setup.
     Setup { part: String, name: String },
-    /// Upload a part file.
+    /// Upload a part file. Other files without --model-rev stay at part level.
     Upload {
         part: String,
         local: PathBuf,

@@ -8,6 +8,7 @@ use starstar_shared::{FileRole, LibraryKind, PartFile, PrinterFamily};
 pub enum FileLevel {
     Part,
     ModelRevision(i64),
+    LatestModelRevision,
     Setup(i64),
     SetupRevision(i64),
 }
@@ -45,10 +46,10 @@ impl PartsStore {
             (&spec.role, &spec.level),
             (
                 FileRole::Source | FileRole::Render,
-                FileLevel::ModelRevision(_)
+                FileLevel::ModelRevision(_) | FileLevel::LatestModelRevision
             ) | (
                 FileRole::Other,
-                FileLevel::Part | FileLevel::ModelRevision(_)
+                FileLevel::Part | FileLevel::ModelRevision(_) | FileLevel::LatestModelRevision
             ) | (
                 FileRole::Slice | FileRole::Project3mf,
                 FileLevel::Setup(_) | FileLevel::SetupRevision(_)
@@ -113,6 +114,13 @@ impl PartsStore {
                     return Err(missing("model revision"));
                 }
                 model = Some(id);
+            }
+            FileLevel::LatestModelRevision => {
+                model = Some(sqlx::query_scalar("SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number DESC LIMIT 1")
+                    .bind(spec.part_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| missing("model revision"))?);
             }
             FileLevel::SetupRevision(id) => {
                 let exists: bool = sqlx::query_scalar(

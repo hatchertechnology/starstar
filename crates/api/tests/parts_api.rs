@@ -64,6 +64,21 @@ async fn upload_tree_preview_download_and_match() {
     };
     let source = upload(format!("/api/parts/{id}/files?name=cube.step"), b"STEP").await;
     assert_eq!(source.status, 201);
+    let duplicate = upload(format!("/api/parts/{id}/files?name=cube.step"), b"STEP").await;
+    assert_eq!(duplicate.status, 200);
+    assert_eq!(duplicate.json()["id"], source.json()["id"]);
+    assert_eq!(
+        api.call(
+            Role::Operator,
+            Method::POST,
+            &format!("/api/parts/{id}/files?name=x.step"),
+            &[],
+            Body::from("x")
+        )
+        .await
+        .status,
+        411
+    );
     let setup = api
         .call(
             Role::Operator,
@@ -94,6 +109,8 @@ async fn upload_tree_preview_download_and_match() {
         )
         .await
         .json();
+    assert_eq!(tree["setups"][0]["revisions"][0]["number"], 1);
+    assert_eq!(tree["setups"][0]["revisions"][0]["slices"][0]["id"], fid);
     assert_eq!(
         tree["setups"][0]["revisions"][0]["slices"][0]["target"]["profile"],
         "speed"
@@ -111,11 +128,9 @@ async fn upload_tree_preview_download_and_match() {
     assert_eq!(preview.headers["content-type"], "image/png");
     assert_eq!(preview.headers["cache-control"], "private, max-age=300");
     assert_eq!(preview.headers["x-content-type-options"], "nosniff");
-    assert!(
-        preview.headers["content-security-policy"]
-            .to_str()
-            .unwrap()
-            .contains("sandbox")
+    assert_eq!(
+        preview.headers["content-security-policy"],
+        "default-src 'none'; sandbox; frame-ancestors 'none'"
     );
     let download = api
         .call(
@@ -127,6 +142,8 @@ async fn upload_tree_preview_download_and_match() {
         )
         .await;
     assert_eq!(download.body, data);
+    assert_eq!(download.headers["content-type"], "application/octet-stream");
+    assert_eq!(download.headers["x-content-type-options"], "nosniff");
     assert_eq!(
         download.headers["content-disposition"],
         "attachment; filename*=UTF-8''cube.bgcode"
@@ -142,6 +159,20 @@ async fn upload_tree_preview_download_and_match() {
         .await;
     assert_eq!(result.status, 200);
     assert_eq!(result.json()[0]["slice"]["id"], fid);
+    tokio::fs::remove_file(
+        api.state
+            .parts
+            .blobs
+            .preview(file["sha256"].as_str().unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        api.get(Role::Viewer, &format!("/api/files/{fid}/preview"))
+            .await
+            .status,
+        500
+    );
 }
 
 #[tokio::test]
@@ -213,4 +244,104 @@ async fn other_download_and_unreachable_printer() {
         .find(|v| v["printer"] == "offline")
         .unwrap();
     assert_eq!(offline["blocked"], "printer unreachable");
+}
+
+#[tokio::test]
+async fn upload_limit_and_missing_asset() {
+    let api = TestApi::start_with(starstar_api::config::Config {
+        max_upload_bytes: 4,
+        ..Default::default()
+    })
+    .await;
+    let part = api
+        .send_json(
+            Role::Operator,
+            Method::POST,
+            "/api/parts",
+            serde_json::json!({"name":"p"}),
+        )
+        .await
+        .json();
+    let id = part["id"].as_i64().unwrap();
+    let path = format!("/api/parts/{id}/files?name=a.step");
+    assert_eq!(
+        api.call(
+            Role::Operator,
+            Method::POST,
+            &path,
+            &[("content-length", "5")],
+            Body::from("12345")
+        )
+        .await
+        .status,
+        413
+    );
+    let file = api
+        .call(
+            Role::Operator,
+            Method::POST,
+            &path,
+            &[("content-length", "4")],
+            Body::from("1234"),
+        )
+        .await
+        .json();
+    let fid = file["id"].as_i64().unwrap();
+    tokio::fs::remove_file(api.state.parts.blobs.path(file["sha256"].as_str().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        api.get(Role::Viewer, &format!("/api/files/{fid}/download"))
+            .await
+            .status,
+        500
+    );
+}
+
+#[tokio::test]
+async fn upload_uses_latest_model_after_streaming() {
+    let api = TestApi::start().await;
+    let part = api
+        .send_json(
+            Role::Operator,
+            Method::POST,
+            "/api/parts",
+            serde_json::json!({"name":"p"}),
+        )
+        .await
+        .json();
+    let id = part["id"].as_i64().unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let stream = futures_util::stream::once(async move {
+        started_tx.send(()).unwrap();
+        resume_rx.await.unwrap();
+        Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"STEP"))
+    });
+    let path = format!("/api/parts/{id}/files?name=a.step");
+    let upload = api.call(
+        Role::Operator,
+        Method::POST,
+        &path,
+        &[("content-length", "4")],
+        Body::from_stream(stream),
+    );
+    let revision = async {
+        started_rx.await.unwrap();
+        let r = api
+            .send_json(
+                Role::Operator,
+                Method::POST,
+                &format!("/api/parts/{id}/revisions"),
+                serde_json::json!({"carry":[]}),
+            )
+            .await;
+        assert_eq!(r.status, 201);
+        let revision = r.json()["id"].as_i64().unwrap();
+        resume_tx.send(()).unwrap();
+        revision
+    };
+    let (file, revision) = tokio::join!(upload, revision);
+    assert_eq!(file.status, 201);
+    assert_eq!(file.json()["model_revision_id"], revision);
 }

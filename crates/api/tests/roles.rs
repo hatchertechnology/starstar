@@ -596,3 +596,42 @@ async fn every_route_rejects_the_role_below_its_minimum() {
         assert_eq!(r.status, StatusCode::FORBIDDEN, "{method} {uri}");
     }
 }
+
+#[tokio::test]
+async fn part_deletion_requires_admin_and_deletes_the_part() {
+    let api = TestApi::start().await;
+    let part = api
+        .send_json(
+            Role::Operator,
+            Method::POST,
+            "/api/parts",
+            json!({"name":"Delete me"}),
+        )
+        .await
+        .json();
+    let path = format!("/api/parts/{}", part["id"].as_i64().unwrap());
+    assert_eq!(
+        api.call(Role::Operator, Method::DELETE, &path, &[], Body::empty())
+            .await
+            .status,
+        403
+    );
+    assert_eq!(
+        api.call(Role::Viewer, Method::GET, &path, &[], Body::empty())
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        api.call(Role::Admin, Method::DELETE, &path, &[], Body::empty())
+            .await
+            .status,
+        204
+    );
+    assert_eq!(
+        api.call(Role::Viewer, Method::GET, &path, &[], Body::empty())
+            .await
+            .status,
+        404
+    );
+}

@@ -289,13 +289,7 @@ async fn upload(
     } else if let Some(id) = q.model_revision {
         FileLevel::ModelRevision(id)
     } else if matches!(role, FileRole::Source | FileRole::Render) {
-        let part = s.parts.get_part(id).await?;
-        FileLevel::ModelRevision(
-            part.model_revisions
-                .first()
-                .ok_or_else(|| ApiError::NotFound("model revision not found".into()))?
-                .id,
-        )
+        FileLevel::LatestModelRevision
     } else {
         FileLevel::Part
     };
@@ -370,6 +364,12 @@ fn secure_asset(mut response: Response) -> Response {
     );
     response
 }
+async fn asset_error(s: &AppState, id: i64, error: std::io::Error) -> Result<ApiError, ApiError> {
+    if error.kind() == std::io::ErrorKind::NotFound && s.parts.get_file(id).await?.is_none() {
+        return Ok(ApiError::NotFound("file not found".into()));
+    }
+    Ok(ApiError::Internal("internal error".into()))
+}
 async fn preview(
     _: Viewer,
     State(s): State<AppState>,
@@ -379,9 +379,10 @@ async fn preview(
     if !f.has_preview || f.role == FileRole::Other {
         return Err(ApiError::NotFound("file has no preview".into()));
     }
-    let data = tokio::fs::read(s.parts.blobs.preview(&f.sha256))
-        .await
-        .map_err(|_| ApiError::Internal("internal error".into()))?;
+    let data = match tokio::fs::read(s.parts.blobs.preview(&f.sha256)).await {
+        Ok(data) => data,
+        Err(error) => return Err(asset_error(&s, id, error).await?),
+    };
     Ok(secure_asset(
         (
             [
@@ -403,9 +404,10 @@ async fn download(
     Path(id): Path<i64>,
 ) -> Result<Response, ApiError> {
     let f = get_file(&s, id).await?;
-    let handle = tokio::fs::File::open(s.parts.blobs.path(&f.sha256))
-        .await
-        .map_err(|_| ApiError::Internal("internal error".into()))?;
+    let handle = match tokio::fs::File::open(s.parts.blobs.path(&f.sha256)).await {
+        Ok(handle) => handle,
+        Err(error) => return Err(asset_error(&s, id, error).await?),
+    };
     let encoded = utf8_percent_encode(&f.name, NON_ALPHANUMERIC)
         .to_string()
         .replace("%2D", "-")

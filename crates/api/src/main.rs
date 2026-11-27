@@ -74,8 +74,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
+    let library = starstar_api::library::store::LibraryStore::open(
+        std::path::Path::new(&config.library_dir),
+        db.pool().clone(),
+    )?;
+    library.reconcile().await?;
     let state = AppState {
         store: Arc::new(PrinterStore::from_db(db.clone())),
+        library: Arc::new(library),
         auth: Arc::new(AuthStore::new(db.clone(), Clock::system(), hasher).await?),
         http: http_client()?,
         config: Arc::new(config.clone()),

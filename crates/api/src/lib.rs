@@ -25,6 +25,7 @@ use store::PrinterStore;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<PrinterStore>,
+    pub library: Arc<library::store::LibraryStore>,
     pub http: reqwest::Client,
     pub config: Arc<Config>,
     pub auth: Arc<auth::AuthStore>,

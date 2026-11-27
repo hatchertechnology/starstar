@@ -37,6 +37,7 @@ pub struct Config {
     pub mcp_max_upload_bytes: u64,
     /// `STARSTAR_WEB_DIR`, default `web/.output/public`.
     pub web_dir: String,
+    pub library_dir: String,
     /// `STARSTAR_PRINTER_TIMEOUT_SECS`, default 10. Per-request timeout for PrusaLink control calls.
     pub printer_timeout: Duration,
     /// `STARSTAR_UPLOAD_TIMEOUT_SECS`, default 3600. Per-request timeout for uploads to a printer.
@@ -162,6 +163,7 @@ impl Config {
             max_upload_bytes: mb("STARSTAR_MAX_UPLOAD_MB", 512),
             mcp_max_upload_bytes: mb("STARSTAR_MCP_MAX_UPLOAD_MB", 25),
             web_dir: var("STARSTAR_WEB_DIR").unwrap_or(defaults.web_dir),
+            library_dir: var("STARSTAR_LIBRARY_DIR").unwrap_or(defaults.library_dir),
             printer_timeout: secs("STARSTAR_PRINTER_TIMEOUT_SECS", defaults.printer_timeout),
             upload_timeout: secs("STARSTAR_UPLOAD_TIMEOUT_SECS", defaults.upload_timeout),
             trusted_proxies,
@@ -195,6 +197,7 @@ impl Default for Config {
             max_upload_bytes: 512 * MIB,
             mcp_max_upload_bytes: 25 * MIB,
             web_dir: "web/.output/public".to_owned(),
+            library_dir: "library".to_owned(),
             printer_timeout: Duration::from_secs(10),
             upload_timeout: Duration::from_secs(3600),
             trusted_proxies: Vec::new(),

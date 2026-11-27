@@ -127,7 +127,7 @@ impl UploadBody {
     }
 }
 
-fn too_large_message(max: u64) -> String {
+pub(crate) fn too_large_message(max: u64) -> String {
     if max < 1024 * 1024 {
         format!("upload is larger than the {max} bytes limit")
     } else {

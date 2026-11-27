@@ -49,6 +49,10 @@ impl RealApi {
         let state = rt.block_on(async {
             let db = Db::connect_test().await;
             let state = AppState {
+                library: Arc::new(
+                    starstar_api::library::store::LibraryStore::temporary(db.pool().clone())
+                        .unwrap(),
+                ),
                 store: Arc::new(PrinterStore::from_db(db.clone())),
                 auth: Arc::new(
                     AuthStore::new(db, Clock::system(), Hasher::fast_for_tests())

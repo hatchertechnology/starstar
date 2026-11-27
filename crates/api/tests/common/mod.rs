@@ -30,6 +30,9 @@ pub const TEST_START: i64 = 1_800_000_000;
 pub async fn test_state() -> AppState {
     let db = Db::connect_test().await;
     AppState {
+        library: Arc::new(
+            starstar_api::library::store::LibraryStore::temporary(db.pool().clone()).unwrap(),
+        ),
         store: Arc::new(PrinterStore::from_db(db.clone())),
         auth: Arc::new(
             AuthStore::new(db, Clock::manual(TEST_START), Hasher::fast_for_tests())

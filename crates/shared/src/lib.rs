@@ -4,7 +4,7 @@
 //! native responses into them, so clients never need to know about PrusaLink.
 
 pub mod library;
-pub use library::LibraryKind;
+pub use library::{LibraryFile, LibraryKind, LibrarySort};
 pub mod printers;
 
 pub use printers::*;

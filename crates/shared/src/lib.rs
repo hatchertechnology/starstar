@@ -5,6 +5,8 @@
 
 pub mod library;
 pub use library::{LibraryFile, LibraryKind, LibraryQuery, LibrarySort};
+pub mod parts;
+pub use parts::*;
 pub mod printers;
 
 pub use printers::*;

@@ -37,6 +37,9 @@ web/test/
 **/.npmrc
 **/*.pem
 **/*.key
+**/*.db
+**/*.db-*
+**/*.sqlite*
 **/node_modules/
 **/.nuxt/
 **/.output/

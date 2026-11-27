@@ -310,7 +310,7 @@ async fn threemf_fills_empty_latest_revision_then_creates_next() {
     .unwrap();
     assert_ne!(b.setup_revision_id, Some(r));
     let p = s.get_part(p.id).await.unwrap();
-    assert_eq!(p.setups[0].revisions[1].model_revision_id, m.id);
+    assert_eq!(p.setups[0].revisions[0].model_revision_id, m.id);
 }
 #[tokio::test]
 async fn shared_blob_survives_delete_in_other_part() {
@@ -506,9 +506,9 @@ async fn project_override_and_empty_setup_revision() {
     assert_eq!(p.setups[0].revisions[0].number, 2);
     assert_eq!(
         p.setups[0].revisions[0].model_revision_id,
-        p.model_revisions[0].id
+        p.model_revisions[1].id
     );
-    assert_ne!(p.model_revisions[0].id, newer.id);
+    assert_ne!(p.model_revisions[1].id, newer.id);
     assert_eq!(f.setup_revision_id, Some(p.setups[0].revisions[0].id));
 }
 #[tokio::test]

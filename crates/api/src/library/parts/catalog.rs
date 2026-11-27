@@ -344,11 +344,12 @@ impl PartsStore {
             .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| missing("part"))?;
-        let mids: Vec<i64> =
-            sqlx::query_scalar("SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number")
-                .bind(id)
-                .fetch_all(&mut *conn)
-                .await?;
+        let mids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number DESC",
+        )
+        .bind(id)
+        .fetch_all(&mut *conn)
+        .await?;
         let sids: Vec<i64> =
             sqlx::query_scalar("SELECT id FROM setups WHERE part_id=$1 ORDER BY id")
                 .bind(id)
@@ -403,11 +404,12 @@ impl PartsStore {
             .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| missing("setup"))?;
-        let ids: Vec<i64> =
-            sqlx::query_scalar("SELECT id FROM setup_revisions WHERE setup_id=$1 ORDER BY number")
-                .bind(id)
-                .fetch_all(&mut *conn)
-                .await?;
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM setup_revisions WHERE setup_id=$1 ORDER BY number DESC",
+        )
+        .bind(id)
+        .fetch_all(&mut *conn)
+        .await?;
         let mut revisions = Vec::new();
         for rid in ids {
             revisions.push(self.setup_revision(conn, rid).await?)
@@ -417,7 +419,7 @@ impl PartsStore {
                 .bind(row.try_get::<i64, _>("part_id")?)
                 .fetch_one(&mut *conn)
                 .await?;
-        let behind_model = revisions.last().and_then(|revision| {
+        let behind_model = revisions.first().and_then(|revision| {
             latest
                 .filter(|latest| *latest > revision.model_revision_number)
                 .map(|latest| {

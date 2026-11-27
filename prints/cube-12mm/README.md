@@ -2,8 +2,8 @@
 
 A 12 mm cube with a 0.5 mm bottom chamfer (against elephant's foot) and "SS"
 debossed 0.6 mm on top. Sliced for MK4, MK4S and MINI with Prusament PLA at
-0.20 mm (print profile `0.20mm SPEED`). **Nothing here has been sent to a
-printer.**
+0.20 mm (print profile `0.20mm SPEED`). The MK4 file was uploaded to `mk4-2`
+through the starstar CLI (not printed).
 
 ## Files
 
@@ -11,7 +11,7 @@ printer.**
 |---|---|
 | `cube.py` | CadQuery model (PEP 723 header, run with `uv`) |
 | `cube-12mm.step`, `cube-12mm.stl` | Model exports |
-| `cube-12mm.MK4.bgcode`, `.ini` | Binary G-code and flat slicer config for MK4 (standard 0.4 mm nozzle; printer model MK4IS) |
+| `cube-12mm.MK4.bgcode`, `.ini` | Binary G-code and flat slicer config for MK4 (standard 0.4 mm nozzle; printer model MK4IS). Includes preview thumbnails, see below |
 | `cube-12mm.MK4S.bgcode`, `.ini` | Binary G-code and the flat slicer config for MK4S (0.4 mm high-flow nozzle) |
 | `cube-12mm.MINI.bgcode`, `.ini` | Same for MINI & MINI+ (0.4 mm nozzle) |
 
@@ -49,3 +49,12 @@ uv run $S slice cube-12mm.stl --printer "Original Prusa MINI & MINI+" \
 ```
 
 The `.ini` next to each G-code reproduces the exact slice.
+
+## Thumbnails
+
+The PrusaSlicer CLI does not render G-code thumbnails, so the MK4 screen
+showed a blank preview. The MK4 file has four thumbnail blocks added after
+slicing (16x16, 313x173 and 480x240 QOI, 380x285 PNG). They were rendered from
+`cube.py` and inserted after the printer metadata block, with CRC32 checksums.
+The G-code and metadata blocks are unchanged. The MK4S and MINI files still
+have no thumbnails.

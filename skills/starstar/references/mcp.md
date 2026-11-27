@@ -1,6 +1,6 @@
 # starstar MCP server
 
-The API serves MCP over streamable HTTP at `<public_url>/mcp` (default `http://starstar/mcp`, configured on the server with `STARSTAR_PUBLIC_URL`).
+The API serves MCP over streamable HTTP at `<public_url>/mcp`. The server public URL defaults to `http://127.0.0.1:8080` and is configured with `STARSTAR_PUBLIC_URL`. For this deployment, the configured endpoint is `http://starstar/mcp`. The CLI API URL separately defaults to `http://starstar`.
 
 ## Connect
 
@@ -14,9 +14,15 @@ Then authenticate from the client (in Claude Code, `/mcp`). A browser opens for 
 
 | Role | Tools |
 |---|---|
-| viewer | `list_printers`, `get_printer`, `printer_info`, `printer_status`, `list_storage`, `get_job`, `get_transfer`, `list_files`, `file_state`, `list_cameras`, `get_camera`, `camera_snapshot` |
-| operator (adds) | `upload_file`, `start_print`, `pause_job`, `resume_job`, `continue_job`, `stop_job`, `cancel_transfer`, `take_snapshot` |
+| viewer | `list_printers`, `get_printer`, `printer_info`, `printer_status`, `list_storage`, `get_job`, `get_transfer`, `list_files`, `file_state`, `list_cameras`, `get_camera`, `camera_snapshot`, `part_list`, `part_info` |
+| operator (adds) | `upload_file`, `start_print`, `pause_job`, `resume_job`, `continue_job`, `stop_job`, `cancel_transfer`, `take_snapshot`, `part_match` |
 | admin (adds) | `register_printer`, `remove_printer`, `delete_file`, `order_cameras`, `register_camera`, `remove_camera`, `configure_camera`, `reset_camera_config`, `connect_camera`, `disconnect_camera`, `check_update`, `apply_update` |
+
+Parts tool arguments:
+
+- `part_list`: optional `query` (search part names, file names and profiles) and optional `sort` (`newest` by default, or `name`).
+- `part_info`: required `id` (part ID).
+- `part_match`: required `id` (part ID), optional `setup_id` (defaults to the part's default setup), and optional `profile` (defaults to the setup's default profile).
 
 `upload_file` takes base64 content and is capped (`STARSTAR_MCP_MAX_UPLOAD_MB`, default 25 MB); for bigger files use the CLI.
 

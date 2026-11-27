@@ -94,6 +94,53 @@ Arguments:
   <PRINTER>  Printer name
       --id <ID>            Transfer id. Without it, the current transfer is looked up first
 
+=== part
+Manage parts and their files
+Usage: starstar part [OPTIONS] <COMMAND>
+Commands: ls, new, info, rm, rev, setup, upload, download
+Identify <PART> by name or ID. Use name:X or id:N to disambiguate a numeric name that differs from the matching ID.
+
+=== part ls
+Usage: starstar part ls [OPTIONS]
+      --search <SEARCH>
+      --sort <SORT>        Possible values: newest, name
+
+=== part new
+Usage: starstar part new [OPTIONS] <NAME>
+      --notes <NOTES>
+
+=== part info
+Usage: starstar part info [OPTIONS] <PART>
+      --all                Include replaced slices
+
+=== part rm
+Usage: starstar part rm [OPTIONS] <PART>
+  -y, --yes                Do not ask for confirmation; required without a terminal
+
+=== part rev
+Usage: starstar part rev [OPTIONS] <PART>
+      --note <NOTE>
+      --carry <CARRY>      May be supplied more than once
+
+=== part setup
+Usage: starstar part setup [OPTIONS] <PART> <NAME>
+
+=== part upload
+Usage: starstar part upload [OPTIONS] <PART> <LOCAL>
+      --role <ROLE>        Possible values: source, render, project_3mf, slice, other
+      --setup <SETUP>
+      --setup-rev <SETUP_REV>
+      --model-rev <MODEL_REV>
+      --profile <PROFILE>
+      --replace
+      --name <NAME>
+Other files without --model-rev stay at part level.
+
+=== part download
+Usage: starstar part download [OPTIONS] <ID>
+  -o, --output <OUTPUT>
+      --force
+
 === files
 List, inspect, upload, print and delete files on a printer
 Usage: starstar files [OPTIONS] <COMMAND>
@@ -396,3 +443,5 @@ Usage: starstar printer storage [OPTIONS] <NAME>
 Arguments:
   <NAME>  Printer name
 ```
+
+Exit codes: 0 success; 1 API, I/O, cancellation, or other failure (including HTTP 409); 2 bad arguments or client-side validation; 3 unauthenticated or HTTP 401; 4 HTTP 403; 5 confirmation required without a terminal. `--json` also makes errors machine-readable.

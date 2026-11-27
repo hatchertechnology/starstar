@@ -3,7 +3,7 @@ use crate::{
     library::{blobs::Blobs, store::LibraryError},
     store::{StoreError, is_unique_violation},
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use starstar_shared::{
     FileRole, ModelRevision, Part, PartFile, PrinterFamily, Setup, SetupRevision, SliceTarget,
 };
@@ -108,8 +108,9 @@ impl PartsStore {
         .bind(now())
         .execute(&mut *tx)
         .await?;
+        let part = self.read_part(&mut tx, id).await?;
         tx.commit().await?;
-        self.get_part(id).await
+        Ok(part)
     }
     pub async fn update_part(&self, id: i64, patch: PartPatch) -> Result<Part, PartsError> {
         let mut tx = self.pool.begin().await?;
@@ -132,8 +133,9 @@ impl PartsStore {
         if n == 0 {
             return Err(missing("part"));
         }
+        let part = self.read_part(&mut tx, id).await?;
         tx.commit().await?;
-        self.get_part(id).await
+        Ok(part)
     }
     pub async fn new_model_revision(
         &self,
@@ -159,8 +161,9 @@ impl PartsStore {
         }
         let id:i64=sqlx::query_scalar("INSERT INTO model_revisions(part_id,number,note,created_by,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id").bind(part_id).bind(number).bind(note).bind(by).bind(now()).fetch_one(&mut *tx).await?;
         sqlx::query("INSERT INTO part_files(part_id,model_revision_id,setup_revision_id,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,superseded_by) SELECT part_id,$1,NULL,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,NULL FROM part_files WHERE id=ANY($2)").bind(id).bind(carry).execute(&mut *tx).await?;
+        let model = self.model(&mut tx, id).await?;
         tx.commit().await?;
-        self.model(id).await
+        Ok(model)
     }
     pub async fn create_setup(
         &self,
@@ -179,8 +182,9 @@ impl PartsStore {
         .ok_or_else(|| missing("part or model revision"))?;
         let id:i64=sqlx::query_scalar("INSERT INTO setups(part_id,name,created_by,created_at,next_revision) VALUES($1,$2,$3,$4,2) RETURNING id").bind(part_id).bind(name).bind(by).bind(now()).fetch_one(&mut *tx).await?;
         sqlx::query("INSERT INTO setup_revisions(part_id,setup_id,number,model_revision_id,created_by,created_at) VALUES($1,$2,1,$3,$4,$5)").bind(part_id).bind(id).bind(model).bind(by).bind(now()).execute(&mut *tx).await?;
+        let setup = self.setup(&mut tx, id).await?;
         tx.commit().await?;
-        self.setup(id).await
+        Ok(setup)
     }
     pub async fn update_setup(
         &self,
@@ -188,11 +192,20 @@ impl PartsStore {
         name: Option<String>,
         default_profile: Option<Option<String>>,
     ) -> Result<Setup, PartsError> {
-        let n=sqlx::query("UPDATE setups SET name=COALESCE($2,name),default_profile=CASE WHEN $3 THEN $4 ELSE default_profile END WHERE id=$1").bind(id).bind(name).bind(default_profile.is_some()).bind(default_profile.flatten()).execute(&self.pool).await?.rows_affected();
+        let mut tx = self.pool.begin().await?;
+        let part: i64 = sqlx::query_scalar("SELECT part_id FROM setups WHERE id=$1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| missing("setup"))?;
+        lock(&mut tx, part).await?;
+        let n=sqlx::query("UPDATE setups SET name=COALESCE($2,name),default_profile=CASE WHEN $3 THEN $4 ELSE default_profile END WHERE id=$1").bind(id).bind(name).bind(default_profile.is_some()).bind(default_profile.flatten()).execute(&mut *tx).await?.rows_affected();
         if n == 0 {
             return Err(missing("setup"));
         }
-        self.setup(id).await
+        let setup = self.setup(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(setup)
     }
     pub async fn new_setup_revision(
         &self,
@@ -232,8 +245,9 @@ impl PartsStore {
         .await?
         .ok_or_else(|| missing("setup"))?;
         let id:i64=sqlx::query_scalar("INSERT INTO setup_revisions(part_id,setup_id,number,model_revision_id,note,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id").bind(part).bind(setup_id).bind(number).bind(model).bind(note).bind(by).bind(now()).fetch_one(&mut *tx).await?;
+        let revision = self.setup_revision(&mut tx, id).await?;
         tx.commit().await?;
-        self.setup_revision(id).await
+        Ok(revision)
     }
     async fn delete(&self, kind: &str, id: i64) -> Result<(), PartsError> {
         let mut tx = self.pool.begin().await?;
@@ -274,10 +288,11 @@ impl PartsStore {
                 )));
             }
         }
-        let shas: Vec<String> = sqlx::query_scalar(files)
+        let mut shas: Vec<String> = sqlx::query_scalar(files)
             .bind(id)
             .fetch_all(&mut *tx)
             .await?;
+        sort_digests(&mut shas);
         for sha in &shas {
             sqlx::query("INSERT INTO library_cleanup(sha256) VALUES($1) ON CONFLICT DO NOTHING")
                 .bind(sha)
@@ -317,30 +332,37 @@ impl PartsStore {
         self.delete("model revision", id).await
     }
     pub async fn get_part(&self, id: i64) -> Result<Part, PartsError> {
+        let mut tx = self.pool.begin().await?;
+        lock(&mut tx, id).await?;
+        let part = self.read_part(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(part)
+    }
+    async fn read_part(&self, conn: &mut PgConnection, id: i64) -> Result<Part, PartsError> {
         let row = sqlx::query("SELECT * FROM parts WHERE id=$1")
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| missing("part"))?;
         let mids: Vec<i64> =
             sqlx::query_scalar("SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number")
                 .bind(id)
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *conn)
                 .await?;
         let sids: Vec<i64> =
             sqlx::query_scalar("SELECT id FROM setups WHERE part_id=$1 ORDER BY id")
                 .bind(id)
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *conn)
                 .await?;
         let mut models = Vec::new();
         for mid in mids {
-            models.push(self.model(mid).await?)
+            models.push(self.model(conn, mid).await?)
         }
         let mut setups = Vec::new();
         for sid in sids {
-            setups.push(self.setup(sid).await?)
+            setups.push(self.setup(conn, sid).await?)
         }
-        let other_files=self.files("SELECT * FROM part_files WHERE part_id=$1 AND model_revision_id IS NULL AND setup_revision_id IS NULL ORDER BY id",id).await?;
+        let other_files=self.files(conn, "SELECT * FROM part_files WHERE part_id=$1 AND model_revision_id IS NULL AND setup_revision_id IS NULL ORDER BY id",id).await?;
         Ok(Part {
             id,
             name: row.try_get("name")?,
@@ -354,10 +376,10 @@ impl PartsStore {
             other_files,
         })
     }
-    async fn model(&self, id: i64) -> Result<ModelRevision, PartsError> {
+    async fn model(&self, conn: &mut PgConnection, id: i64) -> Result<ModelRevision, PartsError> {
         let row = sqlx::query("SELECT * FROM model_revisions WHERE id=$1")
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| missing("model revision"))?;
         Ok(ModelRevision {
@@ -368,31 +390,32 @@ impl PartsStore {
             created_at: row.try_get("created_at")?,
             files: self
                 .files(
+                    conn,
                     "SELECT * FROM part_files WHERE model_revision_id=$1 ORDER BY id",
                     id,
                 )
                 .await?,
         })
     }
-    async fn setup(&self, id: i64) -> Result<Setup, PartsError> {
+    async fn setup(&self, conn: &mut PgConnection, id: i64) -> Result<Setup, PartsError> {
         let row = sqlx::query("SELECT * FROM setups WHERE id=$1")
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| missing("setup"))?;
         let ids: Vec<i64> =
             sqlx::query_scalar("SELECT id FROM setup_revisions WHERE setup_id=$1 ORDER BY number")
                 .bind(id)
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *conn)
                 .await?;
         let mut revisions = Vec::new();
         for rid in ids {
-            revisions.push(self.setup_revision(rid).await?)
+            revisions.push(self.setup_revision(conn, rid).await?)
         }
         let latest: Option<i32> =
             sqlx::query_scalar("SELECT MAX(number) FROM model_revisions WHERE part_id=$1")
                 .bind(row.try_get::<i64, _>("part_id")?)
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *conn)
                 .await?;
         let behind_model = revisions.last().and_then(|revision| {
             latest
@@ -412,10 +435,15 @@ impl PartsStore {
             behind_model,
         })
     }
-    async fn setup_revision(&self, id: i64) -> Result<SetupRevision, PartsError> {
-        let row=sqlx::query("SELECT r.*, m.number AS model_number FROM setup_revisions r JOIN model_revisions m ON m.id=r.model_revision_id WHERE r.id=$1").bind(id).fetch_optional(&self.pool).await?.ok_or_else(||missing("setup revision"))?;
+    async fn setup_revision(
+        &self,
+        conn: &mut PgConnection,
+        id: i64,
+    ) -> Result<SetupRevision, PartsError> {
+        let row=sqlx::query("SELECT r.*, m.number AS model_number FROM setup_revisions r JOIN model_revisions m ON m.id=r.model_revision_id WHERE r.id=$1").bind(id).fetch_optional(&mut *conn).await?.ok_or_else(||missing("setup revision"))?;
         let files = self
             .files(
+                conn,
                 "SELECT * FROM part_files WHERE setup_revision_id=$1 ORDER BY id",
                 id,
             )
@@ -440,8 +468,13 @@ impl PartsStore {
             slices,
         })
     }
-    async fn files(&self, query: &str, id: i64) -> Result<Vec<PartFile>, PartsError> {
-        let rows = sqlx::query(query).bind(id).fetch_all(&self.pool).await?;
+    async fn files(
+        &self,
+        conn: &mut PgConnection,
+        query: &str,
+        id: i64,
+    ) -> Result<Vec<PartFile>, PartsError> {
+        let rows = sqlx::query(query).bind(id).fetch_all(&mut *conn).await?;
         rows.into_iter()
             .map(|r| {
                 let role: String = r.try_get("role")?;
@@ -490,5 +523,21 @@ impl PartsStore {
                 })
             })
             .collect()
+    }
+}
+
+fn sort_digests(digests: &mut [String]) {
+    digests.sort_unstable();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sort_digests;
+
+    #[test]
+    fn cleanup_digests_have_a_consistent_order() {
+        let mut digests = vec!["c".to_owned(), "a".to_owned(), "b".to_owned()];
+        sort_digests(&mut digests);
+        assert_eq!(digests, ["a", "b", "c"]);
     }
 }

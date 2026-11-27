@@ -38,10 +38,21 @@ async fn file_thumbnail(
 ) -> Result<Response, ApiError> {
     let (content_type, bytes) =
         files::file_thumbnail(&state, &caller, &name, &storage, &path).await?;
+    // The bytes come from the printer: pass through only raster types, and
+    // sandbox the response in case it is opened directly.
+    let content_type = match content_type.as_str() {
+        "image/png" | "image/jpeg" | "image/webp" | "image/qoi" => content_type,
+        _ => "application/octet-stream".to_owned(),
+    };
     Ok((
         [
             (header::CONTENT_TYPE, content_type),
             (header::CACHE_CONTROL, "private, max-age=300".to_owned()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; sandbox; frame-ancestors 'none'".to_owned(),
+            ),
         ],
         bytes,
     )

@@ -94,6 +94,14 @@ async function confirm() {
     pending.value = null
     if (kind === 'delete') await navigateTo(backTo.value)
   } catch (e) {
+    if (e instanceof ApiRequestError && e.status === 404) {
+      // Removed on the printer since this page loaded.
+      pending.value = null
+      file.value = null
+      gone.value = true
+      release()
+      return
+    }
     actionError.value = errorMessage(e)
   } finally {
     busy.value = false
@@ -118,7 +126,7 @@ const m = computed(() => file.value?.meta ?? null)
 
       <div v-if="file" class="cols">
         <figure class="preview">
-          <img v-if="preview" :src="preview" :alt="`Preview of ${shown}`">
+          <img v-if="preview" :src="preview" :alt="`Preview of ${shown}`" @error="release(); noPreview = true">
           <p v-else-if="noPreview" class="msg muted">No preview in this file</p>
           <p v-else class="msg muted">Loading preview…</p>
         </figure>

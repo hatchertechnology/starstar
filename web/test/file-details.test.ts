@@ -70,6 +70,15 @@ describe('file details page', () => {
     w.unmount()
   })
 
+  it('falls back to "No preview in this file" when the image cannot be shown', async () => {
+    stubFetch(routes())
+    const w = await mount()
+    await w.find('img').trigger('error')
+    expect(w.find('img').exists()).toBe(false)
+    expect(w.text()).toContain('No preview in this file')
+    w.unmount()
+  })
+
   it('shows buttons by role and disables Print while a job runs', async () => {
     stubFetch(routes())
     let w = await mount('viewer')
@@ -126,6 +135,21 @@ describe('file details page', () => {
     w.unmount()
   })
 
+  it.each([
+    ['Print', 'Start print', 'POST', `${FILE}/print`],
+    ['Delete', 'Delete', 'DELETE', FILE],
+  ])('switches to "gone" when %s finds the file removed', async (open, confirmLabel, method, path) => {
+    stubFetch(routes({ [`${method} ${path}`]: { status: 404, body: { error: 'not found' } } }))
+    const w = await mount('admin')
+    await btn(w, open)[0]!.trigger('click')
+    await btn(w, confirmLabel).at(-1)!.trigger('click')
+    await flush()
+    expect(w.text()).toContain('This file is no longer on the printer.')
+    expect(w.find('dl').exists()).toBe(false)
+    expect(navigateToMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
   it('shows printing now from the HEAD headers', async () => {
     stubFetch(routes({ [`HEAD ${FILE}`]: { status: 200, headers: { 'currently-printed': 'true' } } }))
     const w = await mount()
@@ -138,5 +162,14 @@ describe('file details page', () => {
     const w = await mount()
     expect(w.text()).toContain('This file was sliced for MK4IS with a 0.4 mm nozzle. mk4 is a MK4 with a 0.6 mm nozzle.')
     w.unmount()
+  })
+})
+
+describe('file details routing', () => {
+  it('a details URL renders the details page on its own, not inside the printer page', () => {
+    const r = useRouter().resolve('/printers/mk4/files/usb/My%20Parts/cube-12mm.bgcode')
+    expect(r.matched).toHaveLength(1)
+    expect(r.params).toMatchObject({ name: 'mk4', storage: 'usb', path: ['My Parts', 'cube-12mm.bgcode'] })
+    expect(useRouter().resolve('/printers/mk4').matched).toHaveLength(1)
   })
 })

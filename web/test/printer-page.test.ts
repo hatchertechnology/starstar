@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { clearNuxtState } from '#app'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flush, stubFetch } from './helpers'
-import PrinterPage from '~/pages/printers/[name].vue'
+import PrinterPage from '~/pages/printers/[name]/index.vue'
 
 beforeEach(() => {
   clearNuxtState()

@@ -338,3 +338,25 @@ async fn thumbnail_encoded_path_round_trips() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert!(api.fake.authorized(Method::GET).iter().any(|q| q.uri == up));
 }
+
+#[tokio::test]
+async fn thumbnail_never_serves_active_content() {
+    let api = TestApi::start().await;
+    let r = api.get(Role::Viewer, THUMB).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.headers["x-content-type-options"], "nosniff");
+    let csp = r.headers["content-security-policy"].to_str().unwrap();
+    assert!(
+        csp.contains("default-src 'none'") && csp.contains("sandbox"),
+        "{csp}"
+    );
+
+    api.fake.set(
+        Method::GET,
+        "/thumb/l/usb/CUBE12~1.BGC",
+        Canned::bytes(200, "image/svg+xml", b"<svg onload='alert(1)'/>".to_vec()),
+    );
+    let r = api.get(Role::Viewer, THUMB).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.headers["content-type"], "application/octet-stream");
+}

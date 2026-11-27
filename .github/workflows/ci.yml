@@ -150,6 +150,4 @@ jobs:
         run: scripts/container-smoke.sh starstar:ci "$DB_URL"
 
       - name: Compose health and hardening (Docker Compose)
-        env:
-          COMPOSE_PROJECT: starstar-ci-${{ github.run_id }}
         run: scripts/compose-check.sh docker starstar:ci

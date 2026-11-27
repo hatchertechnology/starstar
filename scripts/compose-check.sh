@@ -3,7 +3,6 @@
 # assert the real health transitions and effective hardening through the Compose provider.
 #
 # Usage: scripts/compose-check.sh ENGINE IMAGE     (ENGINE: docker or podman)
-#   COMPOSE_PROJECT     project name (default starstar-verify-<random>); must not exist yet
 #   STARSTAR_HTTP_PORT  app host port (default 18080)
 #   STARSTAR_DB_PORT    db host port (default 15432)
 #
@@ -13,8 +12,8 @@ cd "$(dirname "$0")/.."
 
 engine=$1
 image=$2
-project=${COMPOSE_PROJECT:-starstar-verify-$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')}
-[[ $project =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo 'invalid project name' >&2; exit 1; }
+[[ $engine == docker || $engine == podman ]] || { echo 'engine must be docker or podman' >&2; exit 1; }
+project=starstar-verify-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export STARSTAR_HTTP_PORT=${STARSTAR_HTTP_PORT:-18080}
 export STARSTAR_DB_PORT=${STARSTAR_DB_PORT:-15432}
 export STARSTAR_SETUP_TOKEN="verify-only-setup-token-${project}"
@@ -37,12 +36,18 @@ cid() {
 
 # Check all project resources before installing the destructive cleanup trap. Check
 # names as well as labels because provider versions differ in their labeling.
-containers=$("$engine" ps -aq --filter "label=com.docker.compose.project=${project}")
+containers=$("$engine" ps -a --format '{{.Names}}')
+pods=
+if [ "$engine" = podman ]; then
+  pods=$("$engine" pod ps -a --format '{{.Name}}')
+fi
 volumes=$("$engine" volume ls -q)
 networks=$("$engine" network ls --format '{{.Name}}')
+project_containers=$("$engine" ps -aq --filter "label=com.docker.compose.project=${project}")
 project_volumes=$("$engine" volume ls -q --filter "label=com.docker.compose.project=${project}")
 project_networks=$("$engine" network ls -q --filter "label=com.docker.compose.project=${project}")
-if [ -n "$containers$project_volumes$project_networks" ] || printf '%s\n' "$volumes" "$networks" | grep -Eq "^${project}([_-]|$)"; then
+if [ -n "$project_containers$project_volumes$project_networks" ] ||
+   [[ $containers == *"$project"* || $pods == *"$project"* || $volumes == *"$project"* || $networks == *"$project"* ]]; then
   echo "compose project ${project} already exists; refusing to touch it" >&2
   rm -rf "$work"
   exit 1
@@ -82,5 +87,7 @@ compose start db
 wait_health healthy 120
 
 compose stop app
+test "$("$engine" inspect -f '{{.State.Running}}' "$app")" = false
+test "$("$engine" inspect -f '{{.State.Status}}' "$app")" = exited
 test "$("$engine" inspect -f '{{.State.ExitCode}}' "$app")" = 0
 echo "compose check passed (${engine}, project ${project})"

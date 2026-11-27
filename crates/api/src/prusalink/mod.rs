@@ -651,6 +651,18 @@ mod tests {
     }
 
     #[test]
+    fn wire_file_reads_firmware_ro_flag() {
+        // Verbatim file info from an MK4 on firmware 8.0.2.
+        let real = r#"{"name":"CUBE-1~1.BGC","ro":true,"type":"PRINT_FILE","m_timestamp":1795757785,"size":101905,"refs":{"icon":"/thumb/s/usb/CUBE-1~1.BGC","thumbnail":"/thumb/l/usb/CUBE-1~1.BGC","download":"/usb/CUBE-1~1.BGC"},"display_name":"cube-12mm.MK4.bgcode"}"#;
+        let entry = FileEntry::from(serde_json::from_str::<WireFile>(real).unwrap());
+        assert!(entry.read_only);
+        assert!(entry.has_thumbnail);
+        assert_eq!(entry.display_name.as_deref(), Some("cube-12mm.MK4.bgcode"));
+        let long = serde_json::json!({"name": "X", "type": "PRINT_FILE", "read_only": true});
+        assert!(FileEntry::from(serde_json::from_value::<WireFile>(long).unwrap()).read_only);
+    }
+
+    #[test]
     fn thumbnail_link_rejects_unsafe() {
         let c = client();
         for link in [

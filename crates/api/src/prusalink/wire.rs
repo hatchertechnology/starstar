@@ -255,7 +255,8 @@ pub struct WireFile {
     pub display_name: Option<String>,
     #[serde(default, rename = "type")]
     pub kind: String,
-    #[serde(default)]
+    /// MK4 firmware 8.0.2 sends `ro`; the PrusaLink spec names it `read_only`.
+    #[serde(default, alias = "ro")]
     pub read_only: bool,
     #[serde(default)]
     pub size: Option<u64>,

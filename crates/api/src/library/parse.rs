@@ -28,17 +28,29 @@ pub fn parse_file(path: &Path, kind: LibraryKind) -> io::Result<Parsed> {
         LibraryKind::Bgcode => Ok(parse_bgcode(&head)),
         LibraryKind::Gcode => {
             let mut tail = Vec::new();
-            let start = len.saturating_sub(TAIL_LIMIT).max(head.len() as u64);
-            if start < len {
-                file.seek(SeekFrom::Start(start))?;
-                file.read_to_end(&mut tail)?;
-                // The first line may start in the middle of a comment.
-                if start > head.len() as u64 {
-                    if let Some(pos) = tail.iter().position(|&b| b == b'\n') {
-                        tail.drain(..=pos);
-                    } else {
-                        tail.clear();
-                    }
+            let start = len.saturating_sub(TAIL_LIMIT);
+            let boundary = if start == 0 {
+                true
+            } else {
+                file.seek(SeekFrom::Start(start - 1))?;
+                let mut previous = [0];
+                file.read_exact(&mut previous)?;
+                previous[0] == b'\n'
+            };
+            file.seek(SeekFrom::Start(start))?;
+            (&mut file).take(TAIL_LIMIT).read_to_end(&mut tail)?;
+            if !boundary {
+                if let Some(pos) = tail.iter().position(|&b| b == b'\n') {
+                    tail.drain(..=pos);
+                } else {
+                    tail.clear();
+                }
+            }
+            if len > head.len() as u64 {
+                if let Some(pos) = head.iter().rposition(|&b| b == b'\n') {
+                    head.truncate(pos + 1);
+                } else {
+                    head.clear();
                 }
             }
             Ok(parse_ascii(&head, &tail))
@@ -77,28 +89,30 @@ fn update_meta(
         ) {
             continue;
         }
-        found = true;
         if !seen.insert(key.to_owned()) {
             continue;
         }
         let value = value.trim();
         macro_rules! set {
             ($field:ident, $v:expr) => {{
-                found = true;
+                let value = $v;
+                if value.is_some() {
+                    found = true;
+                }
                 if meta.$field.is_none() {
-                    meta.$field = $v;
+                    meta.$field = value;
                 }
             }};
         }
         match key.trim() {
-            "printer_model" => set!(printer_model, Some(value.to_owned())),
-            "filament_type" => set!(filament_type, Some(value.to_owned())),
-            "nozzle_diameter" => set!(nozzle_diameter, value.parse().ok()),
-            "layer_height" => set!(layer_height, value.parse().ok()),
+            "printer_model" => set!(printer_model, (!value.is_empty()).then(|| value.to_owned())),
+            "filament_type" => set!(filament_type, (!value.is_empty()).then(|| value.to_owned())),
+            "nozzle_diameter" => set!(nozzle_diameter, parse_finite(value)),
+            "layer_height" => set!(layer_height, parse_finite(value)),
             "temperature" => set!(nozzle_temp, value.parse().ok()),
             "bed_temperature" => set!(bed_temp, value.parse().ok()),
-            "filament used [g]" => set!(filament_used_g, value.parse().ok()),
-            "filament used [mm]" => set!(filament_used_mm, value.parse().ok()),
+            "filament used [g]" => set!(filament_used_g, parse_finite(value)),
+            "filament used [mm]" => set!(filament_used_mm, parse_finite(value)),
             "estimated printing time (normal mode)" => {
                 set!(estimated_print_time, parse_time(value))
             }
@@ -106,6 +120,10 @@ fn update_meta(
         }
     }
     found
+}
+
+fn parse_finite(value: &str) -> Option<f64> {
+    value.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 fn parse_time(value: &str) -> Option<u64> {
@@ -129,33 +147,52 @@ fn parse_time(value: &str) -> Option<u64> {
 
 #[derive(Default)]
 struct Previews {
-    png: Option<(u64, Vec<u8>)>,
-    qoi: Option<(u64, Vec<u8>)>,
+    png: Vec<(u64, Vec<u8>)>,
+    qoi: Vec<(u64, Vec<u8>)>,
 }
 impl Previews {
     fn add(&mut self, bytes: &[u8], format: ImageFormat) {
-        let Ok(img) = image::load_from_memory_with_format(bytes, format) else {
+        let reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+        let Ok((width, height)) = reader.into_dimensions() else {
             return;
         };
-        let area = u64::from(img.width()) * u64::from(img.height());
+        let area = u64::from(width) * u64::from(height);
+        if width == 0 || height == 0 || width > 1024 || height > 1024 || area > 1_048_576 {
+            return;
+        }
         let target = if format == ImageFormat::Png {
             &mut self.png
         } else {
             &mut self.qoi
         };
-        if target.as_ref().is_none_or(|(old, _)| area > *old) {
-            if format == ImageFormat::Png {
-                *target = Some((area, bytes.to_vec()));
-            } else {
+        target.push((area, bytes.to_vec()));
+    }
+    fn finish(mut self) -> Option<Vec<u8>> {
+        for (format, candidates) in [
+            (ImageFormat::Png, &mut self.png),
+            (ImageFormat::Qoi, &mut self.qoi),
+        ] {
+            candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+            for (_, bytes) in candidates {
+                let mut reader = image::ImageReader::with_format(Cursor::new(&*bytes), format);
+                let mut limits = image::Limits::default();
+                limits.max_image_width = Some(1024);
+                limits.max_image_height = Some(1024);
+                limits.max_alloc = Some(16 * 1024 * 1024);
+                reader.limits(limits);
+                let Ok(img) = reader.decode() else {
+                    continue;
+                };
+                if format == ImageFormat::Png {
+                    return Some(std::mem::take(bytes));
+                }
                 let mut output = Cursor::new(Vec::new());
                 if img.write_to(&mut output, ImageFormat::Png).is_ok() {
-                    *target = Some((area, output.into_inner()));
+                    return Some(output.into_inner());
                 }
             }
         }
-    }
-    fn finish(self) -> Option<Vec<u8>> {
-        self.png.or(self.qoi).map(|(_, bytes)| bytes)
+        None
     }
 }
 
@@ -164,8 +201,7 @@ fn parse_ascii(head: &[u8], tail: &[u8]) -> Parsed {
     let mut previews = Previews::default();
     let text = String::from_utf8_lossy(head);
     let mut seen = HashSet::new();
-    result.parsed = update_meta(&mut result.meta, &mut seen, &text, true);
-    result.parsed |= update_meta(
+    result.parsed = update_meta(
         &mut result.meta,
         &mut seen,
         &String::from_utf8_lossy(tail),
@@ -213,6 +249,7 @@ fn parse_bgcode_inner(data: &[u8]) -> Option<Parsed> {
     let mut result = Parsed::default();
     let mut previews = Previews::default();
     let mut seen = HashSet::new();
+    let mut budget = 16 * 1024 * 1024usize;
     loop {
         let start = pos;
         let kind = u16_at(data, pos)?;
@@ -245,15 +282,24 @@ fn parse_bgcode_inner(data: &[u8]) -> Option<Parsed> {
             }
             pos += 4;
         }
+        if !matches!(kind, 0 | 2 | 3 | 4 | 5) {
+            continue;
+        }
+        if kind == 5 && !matches!(u16_at(params, 0)?, 0 | 2) {
+            continue;
+        }
+        if matches!(kind, 0 | 2 | 3 | 4) && matches!(compression, 0 | 1) {
+            budget = budget.checked_sub(uncompressed)?;
+        }
+        if kind == 5 && compression == 1 && uncompressed > 16 * 1024 * 1024 {
+            continue;
+        }
         let decoded = match compression {
             0 => content.to_vec(),
             1 => {
-                if uncompressed as u64 > HEAD_LIMIT {
-                    continue;
-                }
                 let mut output = Vec::new();
                 if ZlibDecoder::new(content)
-                    .take(HEAD_LIMIT + 1)
+                    .take(uncompressed as u64 + 1)
                     .read_to_end(&mut output)
                     .is_err()
                     || output.len() != uncompressed
@@ -368,6 +414,107 @@ mod tests {
         let p = parse(b"printer_model = BAD\n; printer_model = FIRST\n; printer_model = SECOND\n; nozzle_diameter = invalid\n; nozzle_diameter = 0.4\n", LibraryKind::Gcode);
         assert_eq!(p.meta.printer_model.as_deref(), Some("FIRST"));
         assert_eq!(p.meta.nozzle_diameter, None);
+    }
+    fn block(kind: u16, compression: u16, declared: usize, content: &[u8], format: u16) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&kind.to_le_bytes());
+        b.extend_from_slice(&compression.to_le_bytes());
+        b.extend_from_slice(&(declared as u32).to_le_bytes());
+        if compression != 0 {
+            b.extend_from_slice(&(content.len() as u32).to_le_bytes());
+        }
+        b.extend_from_slice(&format.to_le_bytes());
+        if kind == 5 {
+            b.extend_from_slice(&[0; 4]);
+        }
+        b.extend_from_slice(content);
+        b
+    }
+    fn bg(blocks: &[Vec<u8>]) -> Vec<u8> {
+        let mut b = b"GCDE\x01\0\0\0\0\0".to_vec();
+        for item in blocks {
+            b.extend_from_slice(item);
+        }
+        b.extend_from_slice(&block(1, 0, 0, &[], 0));
+        b
+    }
+    fn compressed(data: &[u8]) -> Vec<u8> {
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+    #[test]
+    fn metadata_budget_and_size_mismatch_reject_file() {
+        let payload = vec![b'x'; 1024 * 1024];
+        let zipped = compressed(&payload);
+        let mut repeated = vec![block(0, 0, 17, b"printer_model=MK4", 0)];
+        repeated.extend(vec![block(0, 1, payload.len(), &zipped, 0); 17]);
+        assert!(!parse(&bg(&repeated), LibraryKind::Bgcode).parsed);
+        let bad = block(0, 1, 3, &compressed(b"printer_model=MK4"), 0);
+        assert!(
+            !parse(
+                &bg(&[block(0, 0, 17, b"printer_model=MK4", 0), bad]),
+                LibraryKind::Bgcode
+            )
+            .parsed
+        );
+    }
+    #[test]
+    fn oversized_image_headers_are_skipped() {
+        let mut png = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut png, ImageFormat::Png)
+            .unwrap();
+        let valid = png.into_inner();
+        let mut huge_png = valid.clone();
+        huge_png[16..20].copy_from_slice(&1025u32.to_be_bytes());
+        let mut qoi = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut qoi, ImageFormat::Qoi)
+            .unwrap();
+        let valid_qoi = qoi.into_inner();
+        let mut huge_qoi = valid_qoi.clone();
+        huge_qoi[4..8].copy_from_slice(&1025u32.to_be_bytes());
+        for (oversized, small, format) in [(huge_png, valid, 0), (huge_qoi, valid_qoi, 2)] {
+            let p = parse(
+                &bg(&[
+                    block(5, 0, oversized.len(), &oversized, format),
+                    block(5, 0, small.len(), &small, format),
+                ]),
+                LibraryKind::Bgcode,
+            );
+            assert_eq!(dimensions(&p.preview_png.unwrap()), (2, 2));
+        }
+    }
+    #[test]
+    fn ascii_tail_boundary_preserves_complete_lines_and_discards_partial_lines() {
+        let mut exact = vec![b'x'; 100];
+        exact.push(b'\n');
+        exact.extend_from_slice(b"; printer_model = TAIL\n");
+        exact.resize(101 + TAIL_LIMIT as usize, b'x');
+        assert_eq!(
+            parse(&exact, LibraryKind::Gcode)
+                .meta
+                .printer_model
+                .as_deref(),
+            Some("TAIL")
+        );
+        let mut partial = b"; printer_model = WRONG".to_vec();
+        partial.resize(TAIL_LIMIT as usize + 10, b'x');
+        partial.extend_from_slice(b"\n; filament_type = PLA\n");
+        let p = parse(&partial, LibraryKind::Gcode);
+        assert!(p.meta.printer_model.is_none());
+        assert_eq!(p.meta.filament_type.as_deref(), Some("PLA"));
+    }
+    #[test]
+    fn invalid_values_do_not_mark_parsed() {
+        let p = parse(
+            b"; nozzle_diameter = abc\n; layer_height = NaN\n",
+            LibraryKind::Gcode,
+        );
+        assert!(!p.parsed);
+        assert_eq!(p.meta.layer_height, None);
     }
     #[test]
     fn kind_from_name() {

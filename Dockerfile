@@ -40,13 +40,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 starstar \
     && useradd --system --uid 10001 --gid 10001 --no-create-home \
-        --home-dir /nonexistent --shell /usr/sbin/nologin starstar
+        --home-dir /nonexistent --shell /usr/sbin/nologin starstar \
+    && install -d -o 10001 -g 10001 -m 0750 /var/lib/starstar/library
 WORKDIR /app
 # Root-owned and read-only to the runtime user: the process cannot modify its own code.
 COPY --from=api /out/starstar-api /usr/local/bin/starstar-api
 COPY --from=web /src/web/.output/public /app/public
 COPY LICENSE /usr/share/doc/starstar/LICENSE
-ENV STARSTAR_BIND=0.0.0.0:8080 STARSTAR_WEB_DIR=/app/public
+ENV STARSTAR_BIND=0.0.0.0:8080 STARSTAR_WEB_DIR=/app/public \
+    STARSTAR_LIBRARY_DIR=/var/lib/starstar/library
 USER 10001:10001
 EXPOSE 8080
 # The binary is PID 1 and handles SIGTERM/SIGINT with a graceful drain once serving.

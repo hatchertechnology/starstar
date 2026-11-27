@@ -42,6 +42,7 @@ trap cleanup EXIT
   --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
   --cap-drop ALL --security-opt no-new-privileges \
   -e STARSTAR_DATABASE_URL="$db_url" \
+  -e STARSTAR_LIBRARY_DIR=/tmp/starstar-library \
   -e STARSTAR_BIND="127.0.0.1:${port}" \
   -e STARSTAR_PUBLIC_URL="$url" \
   -e STARSTAR_ALLOW_INSECURE_HTTP=1 \

@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: starstar-library
+spec:
+  storageClassName: zfs-local
+  persistentVolumeReclaimPolicy: Retain
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteOnce
+  local:
+    path: /hatch1/services/starstar/library
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - thor
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: starstar-library
+  namespace: starstar
+spec:
+  volumeName: starstar-library
+  storageClassName: zfs-local
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi

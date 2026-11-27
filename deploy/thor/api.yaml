@@ -72,6 +72,8 @@ spec:
               value: starstar-api
             - name: STARSTAR_BIND
               value: 0.0.0.0:8080
+            - name: STARSTAR_LIBRARY_DIR
+              value: /var/lib/starstar/library
             - name: STARSTAR_PUBLIC_URL
               value: https://starstar.tailb56d83.ts.net
             # k3s cluster CIDR. Safe because NetworkPolicy starstar-api admits
@@ -120,9 +122,14 @@ spec:
               drop:
                 - ALL
           volumeMounts:
+            - name: library
+              mountPath: /var/lib/starstar/library
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: library
+          persistentVolumeClaim:
+            claimName: starstar-library
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi

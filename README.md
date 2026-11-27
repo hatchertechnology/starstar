@@ -12,6 +12,7 @@ starstar manages Prusa MK4 and MINI printers through PrusaLink. It has:
 - a **CLI** (`starstar`) for printers, jobs, files, cameras and firmware;
 - an **MCP endpoint** at `/mcp` for AI agents;
 - an **agent skill** that teaches agents to use the CLI.
+- a **print library** for storing, browsing, and downloading sliced files and their previews.
 
 ## Running with Compose (recommended for local development)
 
@@ -20,8 +21,8 @@ starstar manages Prusa MK4 and MINI printers through PrusaLink. It has:
 ```sh
 docker compose up --build -d        # or: podman compose up --build -d
 docker compose logs -f app          # prints the one-time setup code on first start
-docker compose down                 # stop services, keeping the postgres-data volume
-docker compose down -v              # stop services and wipe the local database
+docker compose down                 # stop services, keeping database and library volumes
+docker compose down -v              # stop services and wipe the local database and library
 ```
 
 Keep a single API replica: pending OAuth authorization requests, rate limiters, and the setup code include in-memory state.
@@ -45,6 +46,7 @@ Required and useful settings:
 - `STARSTAR_PUBLIC_URL`: client-facing origin for OAuth and MCP (default `http://127.0.0.1:8080`).
 - `STARSTAR_ALLOW_INSECURE_HTTP=1`: allow binding a non-loopback address with an `http://` public URL (for example inside a container or on a LAN).
 - `STARSTAR_WEB_DIR`: directory holding the generated UI (default `web/.output/public`).
+- `STARSTAR_LIBRARY_DIR`: writable library storage directory (default `library`, relative to the working directory).
 - `STARSTAR_SETUP_TOKEN`: optional fixed first-admin setup code (at least 16 characters).
 
 ### Running tests

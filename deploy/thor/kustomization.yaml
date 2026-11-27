@@ -17,6 +17,7 @@ resources:
   - namespace.yaml
   - networkpolicy.yaml
   - database.yaml
+  - library-volume.yaml
   - api.yaml
   - ingress.yaml
 

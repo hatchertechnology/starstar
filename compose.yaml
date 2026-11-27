@@ -34,6 +34,9 @@ services:
       STARSTAR_PUBLIC_URL: http://127.0.0.1:${STARSTAR_HTTP_PORT:-8080}
       STARSTAR_ALLOW_INSECURE_HTTP: "1"
       STARSTAR_SETUP_TOKEN: ${STARSTAR_SETUP_TOKEN:-}
+      STARSTAR_LIBRARY_DIR: /var/lib/starstar/library
+    volumes:
+      - library-data:/var/lib/starstar/library
     # Same runtime restrictions as the Thor pod securityContext, so local runs catch regressions.
     read_only: true
     tmpfs:
@@ -63,3 +66,4 @@ services:
 
 volumes:
   postgres-data:
+  library-data:

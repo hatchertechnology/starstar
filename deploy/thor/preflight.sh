@@ -32,6 +32,14 @@ ZERO=sha256:0000000000000000000000000000000000000000000000000000000000000000
 # Kustomize rendering is offline; --context has no effect here.
 RENDERED=$(kubectl kustomize "$DIR") || fail "kustomize render failed"
 
+printf '%s\n' "$RENDERED" | yq -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "starstar-api")' | jq -se '
+  length == 1 and (.[0].spec.template.spec as $pod |
+    ([$pod.volumes[]? | select(.name == "library" and .persistentVolumeClaim.claimName == "starstar-library" and (.persistentVolumeClaim.readOnly // false) == false)] | length) == 1 and
+    ([$pod.containers[]? | select(.name == "api") |
+      select(any(.volumeMounts[]?; .name == "library" and .mountPath == "/var/lib/starstar/library" and (.readOnly // false) == false)) |
+      select(any(.env[]?; .name == "STARSTAR_LIBRARY_DIR" and .value == "/var/lib/starstar/library"))] | length) == 1)' >/dev/null \
+  || fail "Deployment must mount PVC starstar-library writable at /var/lib/starstar/library and set STARSTAR_LIBRARY_DIR"
+
 IMAGES=$(printf '%s\n' "$RENDERED" | yq -N \
   'select(.kind == "Deployment" and .metadata.name == "starstar-api")
    | (.spec.template.spec.initContainers // []) + .spec.template.spec.containers

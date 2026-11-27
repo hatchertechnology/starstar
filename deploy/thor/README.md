@@ -8,6 +8,7 @@ These manifests run Starstar on the Thor k3s cluster, reachable only on the tail
 | `namespace.yaml` | Namespace `starstar`, Pod Security `restricted` (enforce, audit, warn) |
 | `networkpolicy.yaml` | `starstar-default-deny`, `starstar-api`, `starstar-postgres` |
 | `database.yaml` | CloudNativePG Cluster `starstar-pg` (PostgreSQL 17.11, 1 instance, `local-path` 10Gi, TLS-only) |
+| `library-volume.yaml` | Retained 100Gi local PV and PVC `starstar-library` on Thor |
 | `api.yaml` | ServiceAccount `starstar-api` (no token), Deployment `starstar-api` (1 replica, Recreate), Service `starstar:8080` |
 | `ingress.yaml` | Tailscale Ingress `starstar` (TLS by the Tailscale operator, tailnet only) |
 | `kustomization.yaml` | Namespace, common label and the **image digest** |
@@ -37,6 +38,23 @@ These manifests run Starstar on the Thor k3s cluster, reachable only on the tail
 ## Deploy
 
 Run all commands from the repository root. Keep the terminal output: it is the deploy record.
+
+### Library host preparation
+
+Prepare the library directory once as root on Thor before applying the manifests. Check `zfs list hatch1/services` first. If it is a ZFS dataset, create the child dataset:
+
+```sh
+zfs create -p -o mountpoint=/hatch1/services/starstar/library hatch1/services/starstar/library
+```
+
+If `hatch1/services` is a plain directory instead, use `mkdir -p /hatch1/services/starstar/library`. Then, in either case:
+
+```sh
+chown 10001:10001 /hatch1/services/starstar/library
+chmod 0750 /hatch1/services/starstar/library
+```
+
+The API mounts the PVC at `/var/lib/starstar/library`. The PV has reclaim policy `Retain`: deleting the PVC does not delete its files. Backups are planned for phase 3 and are not yet configured.
 
 ### First deployment
 
@@ -321,14 +339,15 @@ Expect a short outage. In-flight printer uploads are cut at the 60 s grace perio
 
 - **Image:** set the digest from the verified `rollback image:` line of the upgrade's preflight log, then run the same upgrade block. `kubectl --context thor -n starstar rollout undo deploy/starstar-api` also works, but the next `apply -k` reverts it, so fix `kustomization.yaml` as well.
 - **Schema:** the API refuses to start if the database schema is newer than the binary. You cannot roll back past a release that added a migration. Without a backup, the only way back is a restore from the [manual dump](#manual-dump) taken before the upgrade.
+- **Library migration v3:** once the new API has migrated Postgres to v3, pinning the previously verified pre-v3 image alone will leave the API unable to start because it rejects the newer schema. To return to that image, restore a verified pre-migration database dump using the procedure below; this loses database changes made since that dump. Keep a matching snapshot or copy of the library files when restoring a database from a later point, so its catalog and blobs correspond. The database dump does not contain library files.
 - **Stop the app without touching data:** `kubectl --context thor -n starstar scale deploy/starstar-api --replicas=0`. The next `apply -k` sets it back to 1.
 - **Undo a hardening change** (see Troubleshooting) by editing the manifest and applying again. Never delete and recreate the Cluster.
 
 ## Backups (not yet configured)
 
-**What exists:** one copy of the data, on the CNPG PVC under `/hatch1/k3s/storage/pvc-<uid>_starstar_starstar-pg-1` on Thor's ZFS pool. There are no WAL archives (`archive_mode` is on, but nothing is configured to receive the WAL) and no `ScheduledBackup`.
+**What exists:** one copy of the database on the CNPG PVC under `/hatch1/k3s/storage/pvc-<uid>_starstar_starstar-pg-1`, and one copy of library files at `/hatch1/services/starstar/library`, on Thor's ZFS pool. There are no WAL archives (`archive_mode` is on, but nothing is configured to receive the WAL) and no `ScheduledBackup`.
 
-**What is missing:** any off-node backup. Losing Thor's disk, deleting the Cluster or namespace, or a bad migration loses every user, OAuth client and printer record.
+**What is missing:** any off-node backup. Losing Thor's disk can lose the database and library; deleting the Cluster or namespace or a bad migration can lose database records. The manual database dump does not include library files.
 
 ### Manual dump
 
@@ -353,7 +372,7 @@ Compare counts and application data with the source at the dump's point in time;
 
 This procedure restores into a fresh database in the existing `starstar-pg` Cluster. Choose a compatible image digest, set it in `kustomization.yaml`, and run preflight, preserving the rollback record. If no API pod is Ready, pass the full verified image from the previous rollback record: `deploy/thor/preflight.sh thor "$ROLLBACK"`, with `ROLLBACK` set to that image. Do not use the failed Deployment template as the record. Scale the API to zero and wait for all API pods to terminate. Keep it at zero during the restore. Resolve `PG` as above. Restore into a new `starstar_restore` database using the `createdb` and `pg_restore --exit-on-error` commands above, substituting `starstar_restore` and the selected encrypted dump. Compare counts and schema against the expected backup and check errors. Do not overwrite an existing recovery database.
 
-With the API still stopped, terminate remaining connections and rename `starstar` to `starstar_old`, then `starstar_restore` to `starstar` using separate `ALTER DATABASE` commands as a PostgreSQL administrator. Retain `starstar_old` through verification.
+With the API still stopped, restore a matching library snapshot or copy when the dump contains library catalog entries. A database dump alone cannot restore blobs or previews. Preserve the current library data for recovery and verify the restored files correspond to the catalog before restarting. With the API still stopped, terminate remaining connections and rename `starstar` to `starstar_old`, then `starstar_restore` to `starstar` using separate `ALTER DATABASE` commands as a PostgreSQL administrator. Retain `starstar_old` through verification.
 
 Before applying the selected image, temporarily add the following to `kustomization.yaml` so the rendered Deployment remains stopped:
 

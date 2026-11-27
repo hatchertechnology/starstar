@@ -39,7 +39,7 @@ cid() {
 containers=$("$engine" ps -a --format '{{.Names}}')
 pods=
 if [ "$engine" = podman ]; then
-  pods=$("$engine" pod ps -a --format '{{.Name}}')
+  pods=$("$engine" pod ps --format '{{.Name}}')
 fi
 volumes=$("$engine" volume ls -q)
 networks=$("$engine" network ls --format '{{.Name}}')

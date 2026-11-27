@@ -1,12 +1,14 @@
 use crate::{PrintMeta, PrinterKind};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use unicode_casefold::UnicodeCaseFold;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileRole {
     Source,
     Render,
+    #[serde(rename = "project_3mf")]
     Project3mf,
     Slice,
     Other,
@@ -68,11 +70,11 @@ pub struct SliceTarget {
 
 impl SliceTarget {
     pub fn nozzle_matches(a: f64, b: f64) -> bool {
-        (a - b).abs() <= 0.001
+        (a - b).abs() <= 0.001 + f64::EPSILON
     }
 
     pub fn profile_eq(a: &str, b: &str) -> bool {
-        a.trim().to_lowercase() == b.trim().to_lowercase()
+        a.trim().case_fold().eq(b.trim().case_fold())
     }
 }
 
@@ -219,6 +221,29 @@ mod tests {
         );
         assert!(PrinterFamily::Mk4.matches_kind(crate::PrinterKind::Mk4));
         assert!(!PrinterFamily::Mk4.matches_kind(crate::PrinterKind::Mini));
+    }
+
+    #[test]
+    fn project_3mf_role_round_trips_with_wire_name() {
+        assert_eq!(
+            serde_json::to_string(&FileRole::Project3mf).unwrap(),
+            "\"project_3mf\""
+        );
+        assert_eq!(
+            serde_json::from_str::<FileRole>("\"project_3mf\"").unwrap(),
+            FileRole::Project3mf
+        );
+    }
+
+    #[test]
+    fn nozzle_tolerance_includes_boundary() {
+        assert!(SliceTarget::nozzle_matches(0.4, 0.401));
+        assert!(!SliceTarget::nozzle_matches(0.4, 0.401_000_01));
+    }
+
+    #[test]
+    fn profile_comparison_uses_unicode_case_folding() {
+        assert!(SliceTarget::profile_eq(" Σ ", "ς"));
     }
 
     #[test]

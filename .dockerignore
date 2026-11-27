@@ -11,8 +11,12 @@ crates/*
 !crates/cli/
 !crates/shared/
 crates/*/*
-!crates/*/Cargo.toml
-!crates/*/src/
+!crates/api/Cargo.toml
+!crates/api/src/
+!crates/cli/Cargo.toml
+!crates/cli/src/
+!crates/shared/Cargo.toml
+!crates/shared/src/
 !web/
 web/*
 !web/package.json

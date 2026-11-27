@@ -53,6 +53,8 @@ pub fn match_printers(
                 for f in &r.slices {
                     if f.superseded_by.is_none()
                         && let Some(t) = &f.target
+                        && t.family.is_some()
+                        && t.nozzle.is_some()
                     {
                         let p = t.profile.as_deref();
                         if !profiles.iter().any(|x| profiles_eq(*x, p)) {
@@ -78,10 +80,10 @@ pub fn match_printers(
             if blocked.is_none() {
                 if let Some(nozzle) = printer.nozzle {
                     if let (Some(s), Some(r)) = (setup, revision) {
-                        slice =
+                        let candidates: Vec<_> =
                             r.slices
                                 .iter()
-                                .find(|f| {
+                                .filter(|f| {
                                     f.superseded_by.is_none()
                                         && f.target.as_ref().is_some_and(|t| {
                                             t.family.is_some_and(|family| {
@@ -91,18 +93,32 @@ pub fn match_printers(
                                             }) && profiles_eq(t.profile.as_deref(), chosen)
                                         })
                                 })
-                                .cloned();
-                        if slice.is_none() {
-                            let family = match printer.kind {
-                                PrinterKind::Mk4 => "MK4",
-                                PrinterKind::Mini => "MINI",
-                            };
-                            blocked = Some(format!(
-                                "no slice for {family} · {nozzle} · {} in {} r{}",
-                                chosen.unwrap_or("no profile"),
-                                s.name,
-                                r.number
-                            ));
+                                .collect();
+                        let family = match printer.kind {
+                            PrinterKind::Mk4 => "MK4",
+                            PrinterKind::Mini => "MINI",
+                        };
+                        match candidates.as_slice() {
+                            [] => {
+                                blocked = Some(format!(
+                                    "no slice for {family} · {nozzle} · {} in {} r{}",
+                                    chosen.unwrap_or("no profile"),
+                                    s.name,
+                                    r.number
+                                ))
+                            }
+                            [candidate] => slice = Some((*candidate).clone()),
+                            _ => {
+                                blocked = Some(format!(
+                                    "several slices fit {family} · {nozzle} · {}: {}",
+                                    chosen.unwrap_or("no profile"),
+                                    candidates
+                                        .iter()
+                                        .map(|f| f.name.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ))
+                            }
                         }
                     } else {
                         blocked = Some("setup has no revisions".into());

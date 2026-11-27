@@ -87,7 +87,10 @@ fn matches_by_family_nozzle_profile() {
 fn uses_default_setup_and_default_profile() {
     let mut p = part();
     p.setups[0].default_profile = Some("speed".into());
-    assert!(result(&p, None).slice.is_some());
+    p.setups[0].revisions[0]
+        .slices
+        .push(file(2, Some("quality")));
+    assert_eq!(result(&p, None).slice.unwrap().id, 1);
 }
 #[test]
 fn single_profile_needs_no_choice() {
@@ -110,6 +113,40 @@ fn two_profiles_without_default_asks() {
         result(&p, None).blocked.as_deref(),
         Some("choose a profile")
     );
+}
+#[test]
+fn overlapping_nozzles_block_ambiguous_match() {
+    let mut p = part();
+    let first = &mut p.setups[0].revisions[0].slices[0];
+    first.name = "first.gcode".into();
+    first.target.as_mut().unwrap().nozzle = Some(0.401);
+    let mut second = file(2, Some("speed"));
+    second.name = "second.gcode".into();
+    second.target.as_mut().unwrap().nozzle = Some(0.402);
+    p.setups[0].revisions[0].slices.push(second);
+    let mut pr = printer();
+    pr.nozzle = Some(0.401);
+    let matched = match_printers(&p, None, None, &[pr]).unwrap().remove(0);
+    assert!(matched.slice.is_none());
+    assert_eq!(
+        matched.blocked.as_deref(),
+        Some("several slices fit MK4 · 0.401 · speed: first.gcode, second.gcode")
+    );
+}
+#[test]
+fn unknown_hardware_does_not_affect_profile_inference() {
+    for missing_family in [true, false] {
+        let mut p = part();
+        let mut unknown = file(2, Some("quality"));
+        let target = unknown.target.as_mut().unwrap();
+        if missing_family {
+            target.family = None;
+        } else {
+            target.nozzle = None;
+        }
+        p.setups[0].revisions[0].slices.push(unknown);
+        assert_eq!(result(&p, None).slice.unwrap().id, 1);
+    }
 }
 #[test]
 fn behind_model_blocks_every_printer() {

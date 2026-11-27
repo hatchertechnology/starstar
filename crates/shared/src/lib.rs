@@ -3,6 +3,8 @@
 //! These types are the API's own vocabulary. The API translates each printer's
 //! native responses into them, so clients never need to know about PrusaLink.
 
+pub mod library;
+pub use library::LibraryKind;
 pub mod printers;
 
 pub use printers::*;

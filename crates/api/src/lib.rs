@@ -10,6 +10,7 @@ use axum::Router;
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod library;
 pub mod mcp;
 pub mod printers;
 pub mod prusalink;

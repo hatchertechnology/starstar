@@ -1,19 +1,6 @@
 use starstar_api::library::parts::{FileLevel, UploadSpec};
 use starstar_shared::FileRole;
 
-#[test]
-fn upload_interface_accepts_model_revision() {
-    let spec = UploadSpec {
-        part_id: 1,
-        level: FileLevel::ModelRevision(2),
-        role: FileRole::Source,
-        name: "part.step".into(),
-        profile: None,
-        replace: false,
-    };
-    assert_eq!(spec.part_id, 1);
-}
-
 use axum::body::Bytes;
 use futures_util::stream;
 use starstar_api::{
@@ -53,6 +40,7 @@ async fn upload(
     s.add_file(
         UploadSpec {
             part_id: part,
+            model_revision_id: None,
             level,
             role,
             name: name.into(),
@@ -467,4 +455,285 @@ async fn relabel_rejects_existing_target_even_with_whitespace() {
             .await,
         Err(PartsError::Conflict(_))
     ));
+}
+
+#[tokio::test]
+async fn project_override_and_empty_setup_revision() {
+    let (_db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    let q = s.create_part("q", None, "u").await.unwrap();
+    let x = s.create_setup(p.id, "s", "u").await.unwrap();
+    s.delete_setup_revision(x.revisions[0].id).await.unwrap();
+    let err = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "a.gcode",
+        vec![1],
+        None,
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, PartsError::BadRequest(_)));
+    assert_eq!(err.to_string(), "setup s has no revisions");
+    let spec = |model_revision_id| UploadSpec {
+        part_id: p.id,
+        model_revision_id,
+        level: FileLevel::Setup(x.id),
+        role: FileRole::Project3mf,
+        name: "a.3mf".into(),
+        profile: None,
+        replace: false,
+    };
+    let send = |spec| {
+        s.add_file(
+            spec,
+            "u",
+            stream::iter([Ok::<_, ()>(Bytes::from_static(b"x"))]),
+            1,
+            1,
+        )
+    };
+    assert!(matches!(
+        send(spec(Some(q.model_revisions[0].id))).await,
+        Err(PartsError::NotFound(_))
+    ));
+    let newer = s.new_model_revision(p.id, None, &[], "u").await.unwrap();
+    let (f, _) = send(spec(Some(p.model_revisions[0].id))).await.unwrap();
+    let p = s.get_part(p.id).await.unwrap();
+    assert_eq!(p.setups[0].revisions[0].number, 2);
+    assert_eq!(
+        p.setups[0].revisions[0].model_revision_id,
+        p.model_revisions[0].id
+    );
+    assert_ne!(p.model_revisions[0].id, newer.id);
+    assert_eq!(f.setup_revision_id, Some(p.setups[0].revisions[0].id));
+}
+#[tokio::test]
+async fn reupload_old_bytes_creates_new_current_slice() {
+    let (_db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    let x = s.create_setup(p.id, "s", "u").await.unwrap();
+    let a = fixture("cube-12mm.MK4.bgcode");
+    let b = fixture("cube-12mm.MK4S.bgcode");
+    let (first, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "plate.bgcode",
+        a.clone(),
+        Some("speed"),
+        false,
+    )
+    .await
+    .unwrap();
+    let (second, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "plate.bgcode",
+        b,
+        Some("speed"),
+        true,
+    )
+    .await
+    .unwrap();
+    let (third, created) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "plate.bgcode",
+        a,
+        Some("speed"),
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(created);
+    assert_ne!(first.id, third.id);
+    assert_eq!(
+        s.get_file(second.id).await.unwrap().unwrap().superseded_by,
+        Some(third.id)
+    );
+}
+#[tokio::test]
+async fn deleting_relabeled_replacement_keeps_existing_current_slice() {
+    let (_db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    let x = s.create_setup(p.id, "s", "u").await.unwrap();
+    let (a, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "a.bgcode",
+        fixture("cube-12mm.MK4.bgcode"),
+        Some("speed"),
+        false,
+    )
+    .await
+    .unwrap();
+    let (b, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "b.bgcode",
+        fixture("cube-12mm.MK4S.bgcode"),
+        Some("speed"),
+        true,
+    )
+    .await
+    .unwrap();
+    s.update_file(b.id, Some(Some("quality".into())), None)
+        .await
+        .unwrap();
+    let (c, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "c.bgcode",
+        fixture("cube-12mm.MK4.bgcode"),
+        Some(" speed "),
+        false,
+    )
+    .await
+    .unwrap();
+    s.delete_file(b.id).await.unwrap();
+    assert_eq!(
+        s.get_file(a.id).await.unwrap().unwrap().superseded_by,
+        Some(c.id)
+    );
+    assert_eq!(s.get_file(c.id).await.unwrap().unwrap().superseded_by, None);
+}
+#[tokio::test]
+async fn slice_target_normalization_and_occupied_project_conflict() {
+    let (_db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    let x = s.create_setup(p.id, "s", "u").await.unwrap();
+    let rev = x.revisions[0].id;
+    let data = b"; printer_model = MK4\n; nozzle_diameter = 0.4008\n".to_vec();
+    let (a, _) = upload(
+        &s,
+        p.id,
+        FileLevel::SetupRevision(rev),
+        FileRole::Slice,
+        "a.gcode",
+        data,
+        Some("   "),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.target.unwrap().nozzle, Some(0.401));
+    let data = b"; printer_model = MK4\n; nozzle_diameter = 0.4011\n".to_vec();
+    assert!(matches!(
+        upload(
+            &s,
+            p.id,
+            FileLevel::SetupRevision(rev),
+            FileRole::Slice,
+            "b.gcode",
+            data,
+            None,
+            false
+        )
+        .await,
+        Err(PartsError::Conflict(_))
+    ));
+    upload(
+        &s,
+        p.id,
+        FileLevel::SetupRevision(rev),
+        FileRole::Project3mf,
+        "a.3mf",
+        vec![1],
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    let err = upload(
+        &s,
+        p.id,
+        FileLevel::SetupRevision(rev),
+        FileRole::Project3mf,
+        "b.3mf",
+        vec![2],
+        None,
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, PartsError::Conflict(_)));
+    assert!(err.to_string().contains("already has a 3MF"));
+}
+
+#[tokio::test]
+async fn target_rounding_replaces_only_matching_index_key() {
+    let (_db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    let x = s.create_setup(p.id, "s", "u").await.unwrap();
+    let data = |n: &str| format!("; printer_model = MK4\n; nozzle_diameter = {n}\n").into_bytes();
+    let (a, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "a.gcode",
+        data("0.4000"),
+        Some(" speed "),
+        false,
+    )
+    .await
+    .unwrap();
+    let (b, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "b.gcode",
+        data("0.4015"),
+        Some("speed"),
+        false,
+    )
+    .await
+    .unwrap();
+    let (c, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "c.gcode",
+        data("0.4008"),
+        Some("speed"),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(s.get_file(a.id).await.unwrap().unwrap().superseded_by, None);
+    assert_eq!(s.get_file(b.id).await.unwrap().unwrap().superseded_by, None);
+    assert_eq!(c.target.unwrap().nozzle, Some(0.401));
+    let (d, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(x.id),
+        FileRole::Slice,
+        "d.gcode",
+        data("0.4009"),
+        Some("SPEED"),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        s.get_file(c.id).await.unwrap().unwrap().superseded_by,
+        Some(d.id)
+    );
 }

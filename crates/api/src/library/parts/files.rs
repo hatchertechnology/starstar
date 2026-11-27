@@ -3,7 +3,7 @@ use crate::library::blobs::PreviewSource;
 use axum::body::Bytes;
 use futures_util::Stream;
 use sqlx::Row;
-use starstar_shared::{FileRole, LibraryKind, PartFile, PrinterFamily, SliceTarget};
+use starstar_shared::{FileRole, LibraryKind, PartFile, PrinterFamily};
 
 pub enum FileLevel {
     Part,
@@ -13,6 +13,7 @@ pub enum FileLevel {
 }
 pub struct UploadSpec {
     pub part_id: i64,
+    pub model_revision_id: Option<i64>,
     pub level: FileLevel,
     pub role: FileRole,
     pub name: String,
@@ -83,6 +84,18 @@ impl PartsStore {
         if !exists {
             return Err(missing("part"));
         }
+        if let Some(id) = spec.model_revision_id {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM model_revisions WHERE id=$1 AND part_id=$2)",
+            )
+            .bind(id)
+            .bind(spec.part_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !exists {
+                return Err(missing("model revision"));
+            }
+        }
         let mut model = None;
         let mut revision = None;
         let mut setup_id = None;
@@ -115,9 +128,18 @@ impl PartsStore {
                 revision = Some(id);
             }
             FileLevel::Setup(id) => {
+                let name: String =
+                    sqlx::query_scalar("SELECT name FROM setups WHERE id=$1 AND part_id=$2")
+                        .bind(id)
+                        .bind(spec.part_id)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                        .ok_or_else(|| missing("setup"))?;
                 revision=sqlx::query_scalar("SELECT id FROM setup_revisions WHERE setup_id=$1 AND part_id=$2 ORDER BY number DESC LIMIT 1").bind(id).bind(spec.part_id).fetch_optional(&mut *tx).await?;
-                if revision.is_none() {
-                    return Err(missing("setup"));
+                if revision.is_none() && spec.role == FileRole::Slice {
+                    return Err(PartsError::BadRequest(format!(
+                        "setup {name} has no revisions"
+                    )));
                 }
                 setup_id = Some(id);
             }
@@ -136,8 +158,10 @@ impl PartsStore {
             FileRole::Slice => "slice",
             FileRole::Other => "other",
         };
-        let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM part_files WHERE part_id=$1 AND model_revision_id IS NOT DISTINCT FROM $2 AND setup_revision_id IS NOT DISTINCT FROM $3 AND role=$4 AND name=$5 AND sha256=$6 ORDER BY id DESC LIMIT 1").bind(spec.part_id).bind(model).bind(revision).bind(role).bind(&spec.name).bind(&item.sha256).fetch_optional(&mut *tx).await?;
-        if let Some(id) = existing {
+        let existing: Option<(i64, String)> = sqlx::query_as("SELECT id,sha256 FROM part_files WHERE part_id=$1 AND model_revision_id IS NOT DISTINCT FROM $2 AND setup_revision_id IS NOT DISTINCT FROM $3 AND role=$4 AND name=$5 AND superseded_by IS NULL ORDER BY id DESC LIMIT 1").bind(spec.part_id).bind(model).bind(revision).bind(role).bind(&spec.name).fetch_optional(&mut *tx).await?;
+        if let Some((id, sha)) = existing
+            && sha == item.sha256
+        {
             let file = self
                 .files(&mut tx, "SELECT * FROM part_files WHERE id=$1", id)
                 .await?
@@ -145,19 +169,26 @@ impl PartsStore {
             tx.commit().await?;
             return Ok((file, false));
         }
-        if spec.role == FileRole::Project3mf
-            && let Some(setup) = setup_id
-        {
-            let occupied: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM part_files WHERE setup_revision_id=$1 AND role='project_3mf')").bind(revision).fetch_one(&mut *tx).await?;
-            if occupied {
-                let latest: i64 = sqlx::query_scalar(
-                    "SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number DESC LIMIT 1",
-                )
-                .bind(spec.part_id)
-                .fetch_one(&mut *tx)
-                .await?;
-                let number:i32=sqlx::query_scalar("UPDATE setups SET next_revision=next_revision+1 WHERE id=$1 RETURNING next_revision-1").bind(setup).fetch_one(&mut *tx).await?;
-                revision=Some(sqlx::query_scalar("INSERT INTO setup_revisions(part_id,setup_id,number,model_revision_id,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id").bind(spec.part_id).bind(setup).bind(number).bind(latest).bind(by).bind(now()).fetch_one(&mut *tx).await?);
+        if spec.role == FileRole::Project3mf {
+            let occupied: bool = if let Some(revision) = revision {
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM part_files WHERE setup_revision_id=$1 AND role='project_3mf')").bind(revision).fetch_one(&mut *tx).await?
+            } else {
+                false
+            };
+            if let Some(setup) = setup_id {
+                if occupied || revision.is_none() {
+                    let model_id: i64 = if let Some(id) = spec.model_revision_id {
+                        id
+                    } else {
+                        sqlx::query_scalar("SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number DESC LIMIT 1").bind(spec.part_id).fetch_one(&mut *tx).await?
+                    };
+                    let number:i32=sqlx::query_scalar("UPDATE setups SET next_revision=next_revision+1 WHERE id=$1 RETURNING next_revision-1").bind(setup).fetch_one(&mut *tx).await?;
+                    revision=Some(sqlx::query_scalar("INSERT INTO setup_revisions(part_id,setup_id,number,model_revision_id,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id").bind(spec.part_id).bind(setup).bind(number).bind(model_id).bind(by).bind(now()).fetch_one(&mut *tx).await?);
+                }
+            } else if occupied {
+                return Err(PartsError::Conflict(
+                    "setup revision already has a 3MF".into(),
+                ));
             }
         }
         let parsed = item.parsed.as_ref().is_some_and(|p| p.parsed);
@@ -170,10 +201,16 @@ impl PartsStore {
             .as_ref()
             .and_then(|m| m.printer_model.as_deref())
             .and_then(PrinterFamily::from_printer_model);
-        let nozzle = meta.as_ref().and_then(|m| m.nozzle_diameter);
+        let raw_nozzle = meta.as_ref().and_then(|m| m.nozzle_diameter);
+        let nozzle: Option<f64> =
+            sqlx::query_scalar("SELECT round($1::double precision::numeric,3)::double precision")
+                .bind(raw_nozzle)
+                .fetch_one(&mut *tx)
+                .await?;
         let profile = spec
             .profile
-            .or_else(|| meta.as_ref().and_then(|m| m.print_settings_id.clone()));
+            .or_else(|| meta.as_ref().and_then(|m| m.print_settings_id.clone()))
+            .and_then(normalize_profile);
         let family_str = family.map(|f| match f {
             PrinterFamily::Mk4 => "mk4",
             PrinterFamily::Mini => "mini",
@@ -182,37 +219,36 @@ impl PartsStore {
         if spec.role == FileRole::Slice
             && let (Some(f), Some(n)) = (family, nozzle)
         {
-            let candidates=self.files(&mut tx,"SELECT * FROM part_files WHERE setup_revision_id=$1 AND role='slice' AND superseded_by IS NULL",revision.unwrap()).await?;
-            for candidate in candidates {
-                if let Some(target) = &candidate.target
-                    && target.family == Some(f)
-                    && target
-                        .nozzle
-                        .is_some_and(|v| SliceTarget::nozzle_matches(v, n))
-                    && match (&target.profile, &profile) {
-                        (Some(a), Some(b)) => SliceTarget::profile_eq(a, b),
-                        (None, None) => true,
-                        _ => false,
-                    }
-                {
-                    if !spec.replace {
-                        let row=sqlx::query("SELECT s.name,r.number FROM setup_revisions r JOIN setups s ON s.id=r.setup_id WHERE r.id=$1").bind(revision).fetch_one(&mut *tx).await?;
-                        let name: String = row.try_get("name")?;
-                        let number: i32 = row.try_get("number")?;
-                        let fam = match f {
-                            PrinterFamily::Mk4 => "MK4",
-                            PrinterFamily::Mini => "MINI",
-                        };
-                        return Err(PartsError::Conflict(format!(
-                            "{name} r{number} already has a slice for {fam} · {n} · {}: {} (id {})",
-                            profile.as_deref().unwrap_or(""),
-                            candidate.name,
-                            candidate.id
-                        )));
-                    }
-                    old = Some(candidate.id);
-                    break;
+            let found = matching_slice(
+                &mut tx,
+                revision.unwrap(),
+                family_str,
+                Some(n),
+                profile.as_deref(),
+                None,
+            )
+            .await?;
+            if let Some(id) = found {
+                if !spec.replace {
+                    let candidate = self
+                        .files(&mut tx, "SELECT * FROM part_files WHERE id=$1", id)
+                        .await?
+                        .remove(0);
+                    let row=sqlx::query("SELECT s.name,r.number FROM setup_revisions r JOIN setups s ON s.id=r.setup_id WHERE r.id=$1").bind(revision).fetch_one(&mut *tx).await?;
+                    let name: String = row.try_get("name")?;
+                    let number: i32 = row.try_get("number")?;
+                    let fam = match f {
+                        PrinterFamily::Mk4 => "MK4",
+                        PrinterFamily::Mini => "MINI",
+                    };
+                    return Err(PartsError::Conflict(format!(
+                        "{name} r{number} already has a slice for {fam} · {n} · {}: {} (id {})",
+                        profile.as_deref().unwrap_or(""),
+                        candidate.name,
+                        candidate.id
+                    )));
                 }
+                old = Some(id);
             }
         }
         // The partial unique index requires the old row to leave the current set before insertion.
@@ -265,6 +301,7 @@ impl PartsStore {
             .await?
             .ok_or_else(|| missing("file"))?;
         lock(&mut tx, part).await?;
+        let profile = profile.map(|p| p.and_then(normalize_profile));
         if let Some(new_profile) = &profile {
             let file = self
                 .files(&mut tx, "SELECT * FROM part_files WHERE id=$1", id)
@@ -276,22 +313,22 @@ impl PartsStore {
                 && let (Some(revision), Some(target)) = (file.setup_revision_id, file.target)
                 && let (Some(family), Some(nozzle)) = (target.family, target.nozzle)
             {
-                let candidates = self.files(&mut tx, "SELECT * FROM part_files WHERE setup_revision_id=$1 AND role='slice' AND superseded_by IS NULL", revision).await?;
-                for candidate in candidates {
-                    if candidate.id != id
-                        && let Some(other) = candidate.target
-                        && other.family == Some(family)
-                        && other
-                            .nozzle
-                            .is_some_and(|n| SliceTarget::nozzle_matches(n, nozzle))
-                        && match (&other.profile, new_profile) {
-                            (Some(a), Some(b)) => SliceTarget::profile_eq(a, b),
-                            (None, None) => true,
-                            _ => false,
-                        }
-                    {
-                        return Err(PartsError::Conflict("slice target already exists".into()));
-                    }
+                let family = match family {
+                    PrinterFamily::Mk4 => "mk4",
+                    PrinterFamily::Mini => "mini",
+                };
+                if matching_slice(
+                    &mut tx,
+                    revision,
+                    Some(family),
+                    Some(nozzle),
+                    new_profile.as_deref(),
+                    Some(id),
+                )
+                .await?
+                .is_some()
+                {
+                    return Err(PartsError::Conflict("slice target already exists".into()));
                 }
             }
         }
@@ -329,21 +366,42 @@ impl PartsStore {
         .await?;
         if let Some(pred) = pred {
             if successor.is_none() {
-                sqlx::query("UPDATE part_files SET superseded_by=id WHERE id=$1")
+                let current: Option<i64> = sqlx::query_scalar("SELECT current.id FROM part_files predecessor JOIN part_files current ON current.setup_revision_id=predecessor.setup_revision_id AND current.role='slice' AND current.superseded_by IS NULL AND current.id<>$2 AND current.target_family=predecessor.target_family AND round(current.target_nozzle::numeric,3)=round(predecessor.target_nozzle::numeric,3) AND lower(coalesce(current.profile,''))=lower(coalesce(predecessor.profile,'')) WHERE predecessor.id=$1 LIMIT 1").bind(pred).bind(id).fetch_optional(&mut *tx).await?;
+                if let Some(current) = current {
+                    sqlx::query("UPDATE part_files SET superseded_by=$1 WHERE superseded_by=$2")
+                        .bind(current)
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                } else {
+                    sqlx::query("UPDATE part_files SET superseded_by=id WHERE id=$1")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                    sqlx::query("UPDATE part_files SET superseded_by=NULL WHERE id=$1")
+                        .bind(pred)
+                        .execute(&mut *tx)
+                        .await?;
+                    sqlx::query(
+                        "UPDATE part_files SET superseded_by=$1 WHERE superseded_by=$2 AND id<>$2",
+                    )
+                    .bind(pred)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            } else {
+                sqlx::query("UPDATE part_files SET superseded_by=$1 WHERE id=$2")
+                    .bind(successor)
+                    .bind(pred)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("UPDATE part_files SET superseded_by=$1 WHERE superseded_by=$2")
+                    .bind(pred)
                     .bind(id)
                     .execute(&mut *tx)
                     .await?;
             }
-            sqlx::query("UPDATE part_files SET superseded_by=$1 WHERE id=$2")
-                .bind(successor)
-                .bind(pred)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("UPDATE part_files SET superseded_by=$1 WHERE superseded_by=$2")
-                .bind(pred)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
         }
         sqlx::query("INSERT INTO library_cleanup(sha256) VALUES($1) ON CONFLICT DO NOTHING")
             .bind(&sha)
@@ -357,4 +415,20 @@ impl PartsStore {
         self.blobs.cleanup_digest(&self.pool, &sha).await?;
         Ok(())
     }
+}
+
+fn normalize_profile(profile: String) -> Option<String> {
+    let trimmed = profile.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+async fn matching_slice(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    revision: i64,
+    family: Option<&str>,
+    nozzle: Option<f64>,
+    profile: Option<&str>,
+    exclude: Option<i64>,
+) -> Result<Option<i64>, PartsError> {
+    Ok(sqlx::query_scalar("SELECT id FROM part_files WHERE setup_revision_id=$1 AND role='slice' AND superseded_by IS NULL AND target_family=$2 AND round(target_nozzle::numeric,3)=round($3::double precision::numeric,3) AND lower(coalesce(profile,''))=lower(coalesce($4::text,'')) AND ($5::bigint IS NULL OR id<>$5) LIMIT 1").bind(revision).bind(family).bind(nozzle).bind(profile).bind(exclude).fetch_optional(&mut **tx).await?)
 }

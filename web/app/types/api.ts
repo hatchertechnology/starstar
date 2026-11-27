@@ -143,22 +143,6 @@ export interface Camera {
   linked: boolean
 }
 
-// legacy: removed in Task 12 (part page)
-export type LibraryKind = 'bgcode' | 'gcode'
-export interface LibraryFile {
-  id: number
-  name: string
-  version: number
-  sha256: string
-  size: number
-  kind: LibraryKind
-  meta?: PrintMeta | null
-  parsed: boolean
-  has_preview: boolean
-  uploaded_by: string
-  uploaded_at: number
-}
-
 export type FileRole = 'source' | 'render' | 'project_3mf' | 'slice' | 'other'
 export type PrinterFamily = 'mk4' | 'mini'
 export interface SliceTarget { family: PrinterFamily | null; nozzle: number | null; profile: string | null }

@@ -41,11 +41,6 @@ export function parseFolderQuery(q: LocationQuery): { storage?: string; segments
   return { storage: storage || undefined, segments: dir ? splitPath(dir) : [] }
 }
 
-// legacy: removed in Task 12 (part page)
-export function libraryPath(id?: number, suffix?: 'preview' | 'download'): string {
-  return ['/api/library', ...(id === undefined ? [] : [String(id)]), ...(suffix ? [suffix] : [])].join('/')
-}
-
 export function partsPath(id?: number, suffix?: 'revisions' | 'setups' | 'files' | 'match'): string {
   return ['/api/parts', ...(id === undefined ? [] : [String(id)]), ...(suffix ? [suffix] : [])].join('/')
 }

@@ -29,12 +29,12 @@ watch(() => props.open, sync)
 </script>
 
 <template>
-  <dialog ref="dialog" :aria-labelledby="titleId" @cancel.prevent="emit('cancel')">
+  <dialog ref="dialog" :aria-labelledby="titleId" @cancel.prevent="!busy && emit('cancel')">
     <h2 :id="titleId">{{ title }}</h2>
     <p>{{ body }}</p>
     <p v-if="error" class="error-text" role="alert">{{ error }}</p>
     <div class="actions">
-      <button ref="cancelBtn" type="button" class="btn btn-secondary" @click="emit('cancel')">Cancel</button>
+      <button ref="cancelBtn" type="button" class="btn btn-secondary" :disabled="busy" @click="emit('cancel')">Cancel</button>
       <button type="button" class="btn" :class="danger ? 'btn-danger' : 'btn-primary'" :disabled="busy" :aria-busy="busy" @click="emit('confirm')">{{ busy ? 'Working…' : confirmLabel }}</button>
     </div>
   </dialog>

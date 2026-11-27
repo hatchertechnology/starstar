@@ -101,6 +101,6 @@ The OAuth sign-in happens in the browser; tools are listed per role. See [refere
 
 Every command and flag: [references/commands.md](references/commands.md).
 
-## Library
+## Parts library
 
-Upload sliced files with `starstar library upload <local>` and find them with `starstar library ls` (optionally `--search` or `--sort`). Use `library info`, `download`, and `rm` to inspect, retrieve, or delete a file. MCP provides `library_list` and `library_info`. Batch printing arrives in phase 2.
+The flat library API (`/api/library`) and the `library_list` / `library_info` MCP tools have been retired in favor of the parts library HTTP API (`/api/parts`, `/api/setups`, `/api/files`, `/api/parts/{id}/match`). The CLI (`starstar part`) and MCP (`part_*`) interfaces are not implemented yet, and the legacy `starstar library` CLI subcommands still point at the retired endpoints — do not use `starstar library`. Until the parts CLI and MCP tools land, upload and print files directly on printers with `starstar files upload` / `starstar files print` (or MCP `upload_file` / `start_print`).

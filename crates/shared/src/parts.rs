@@ -1,7 +1,6 @@
 use crate::{PrintMeta, PrinterKind};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use unicode_casefold::UnicodeCaseFold;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,11 +69,12 @@ pub struct SliceTarget {
 
 impl SliceTarget {
     pub fn nozzle_matches(a: f64, b: f64) -> bool {
-        (a - b).abs() <= 0.001 + f64::EPSILON
+        (a - b).abs() <= 0.001 + 1e-9
     }
 
     pub fn profile_eq(a: &str, b: &str) -> bool {
-        a.trim().case_fold().eq(b.trim().case_fold())
+        let normalize = |value: &str| value.trim().to_lowercase().replace('ς', "σ");
+        normalize(a) == normalize(b)
     }
 }
 
@@ -238,12 +238,15 @@ mod tests {
     #[test]
     fn nozzle_tolerance_includes_boundary() {
         assert!(SliceTarget::nozzle_matches(0.4, 0.401));
+        assert!(SliceTarget::nozzle_matches(2.006, 2.007));
+        assert!(!SliceTarget::nozzle_matches(0.4, 0.4012));
         assert!(!SliceTarget::nozzle_matches(0.4, 0.401_000_01));
     }
 
     #[test]
-    fn profile_comparison_uses_unicode_case_folding() {
+    fn profile_comparison_handles_unicode_case() {
         assert!(SliceTarget::profile_eq(" Σ ", "ς"));
+        assert!(SliceTarget::profile_eq("Ა", "ა"));
     }
 
     #[test]

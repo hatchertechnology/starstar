@@ -1,6 +1,6 @@
 //! Browser sessions.
 
-use rusqlite::{OptionalExtension, params};
+use sqlx::Row;
 
 use super::grants::parse_role;
 use super::{AuthStore, AuthStoreError};
@@ -24,49 +24,48 @@ pub struct SessionCaller {
 }
 
 impl AuthStore {
-    pub fn create_session(&self, user_id: i64) -> Result<NewSession, AuthStoreError> {
+    pub async fn create_session(&self, user_id: i64) -> Result<NewSession, AuthStoreError> {
         let session = NewSession {
             token: random_token("ss_se_"),
             csrf_token: random_token("ss_cs_"),
         };
         let now = self.now();
-        self.db.conn().execute(
-            "INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                hash_token(&session.token).to_vec(),
-                user_id,
-                session.csrf_token,
-                now,
-                now + SESSION_TTL
-            ],
-        )?;
+        sqlx::query(
+            "INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(hash_token(&session.token).as_slice())
+        .bind(user_id)
+        .bind(&session.csrf_token)
+        .bind(now)
+        .bind(now + SESSION_TTL)
+        .execute(self.db.pool())
+        .await?;
         Ok(session)
     }
 
     /// The session for `token`, if it has not expired and its user is enabled.
     /// The role is the user's current role.
-    pub fn session_caller(&self, token: &str) -> Result<Option<SessionCaller>, AuthStoreError> {
-        let found = self
-            .db
-            .conn()
-            .query_row(
-                "SELECT u.id, u.username, u.role, s.csrf_token
-                 FROM sessions s JOIN users u ON u.id = s.user_id
-                 WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.disabled = 0",
-                params![hash_token(token).to_vec(), self.now()],
-                |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((user_id, username, role, csrf_token)) = found else {
+    pub async fn session_caller(
+        &self,
+        token: &str,
+    ) -> Result<Option<SessionCaller>, AuthStoreError> {
+        let row = sqlx::query(
+            "SELECT u.id, u.username, u.role, s.csrf_token
+             FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.token_hash = $1 AND s.expires_at > $2 AND u.disabled = FALSE",
+        )
+        .bind(hash_token(token).as_slice())
+        .bind(self.now())
+        .fetch_optional(self.db.pool())
+        .await?;
+        let Some(row) = row else {
             return Ok(None);
         };
+        let user_id: i64 = row.try_get(0)?;
+        let username: String = row.try_get(1)?;
+        let role: String = row.try_get(2)?;
+        let csrf_token: String = row.try_get(3)?;
         Ok(Some(SessionCaller {
             caller: Caller {
                 username,
@@ -77,25 +76,35 @@ impl AuthStore {
         }))
     }
 
-    pub fn delete_session(&self, token: &str) -> Result<(), AuthStoreError> {
-        self.db.conn().execute(
-            "DELETE FROM sessions WHERE token_hash = ?1",
-            params![hash_token(token).to_vec()],
-        )?;
+    pub async fn delete_session(&self, token: &str) -> Result<(), AuthStoreError> {
+        sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
+            .bind(hash_token(token).as_slice())
+            .execute(self.db.pool())
+            .await?;
         Ok(())
     }
 
     /// Deletes all of a user's sessions except `keep` (a session token).
-    pub fn delete_other_sessions(
+    pub async fn delete_other_sessions(
         &self,
         user_id: i64,
         keep: Option<&str>,
     ) -> Result<(), AuthStoreError> {
-        let keep = keep.map(|t| hash_token(t).to_vec()).unwrap_or_default();
-        self.db.conn().execute(
-            "DELETE FROM sessions WHERE user_id = ?1 AND token_hash != ?2",
-            params![user_id, keep],
-        )?;
+        match keep {
+            Some(token) => {
+                sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2")
+                    .bind(user_id)
+                    .bind(hash_token(token).as_slice())
+                    .execute(self.db.pool())
+                    .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+                    .bind(user_id)
+                    .execute(self.db.pool())
+                    .await?;
+            }
+        }
         Ok(())
     }
 }

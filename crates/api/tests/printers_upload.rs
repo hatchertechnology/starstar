@@ -207,7 +207,8 @@ async fn upload_with_wrong_printer_password_fails_before_any_put() {
     // password, so no PUT is attempted. The hand-signed PUT path is covered by
     // `client_upload_with_wrong_password_reaches_signed_put` below.
     let api = TestApi::start().await;
-    api.add_printer("bad", &api.fake.addr.to_string(), "wrong");
+    api.add_printer("bad", &api.fake.addr.to_string(), "wrong")
+        .await;
     let r = put(
         &api,
         "/api/printers/bad/files/usb/a.bgcode",

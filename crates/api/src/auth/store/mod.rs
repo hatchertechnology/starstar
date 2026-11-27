@@ -1,17 +1,11 @@
-//! SQLite-backed auth state, plus small in-memory structures (pending
+//! PostgreSQL-backed auth state, plus small in-memory structures (pending
 //! authorizations, rate limiters).
-//!
-//! **Locking rule:** every public method locks the shared connection once and
-//! calls `*_in(conn: &Connection, ...)` helpers. A helper never locks, so no
-//! method can deadlock itself, and nothing is held across an `.await`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::sync::Semaphore;
-
-use rusqlite::{TransactionBehavior, params};
 
 use crate::store::{Db, StoreError};
 
@@ -28,7 +22,6 @@ pub mod users;
 
 pub use clients::ClientRecord;
 pub use grants::IssuedTokens;
-
 pub use users::UserRecord;
 
 /// Errors from the auth store. `Display` never contains secrets or SQL text
@@ -36,7 +29,7 @@ pub use users::UserRecord;
 #[derive(Debug, thiserror::Error)]
 pub enum AuthStoreError {
     #[error("database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(#[from] sqlx::Error),
     #[error("database error: {0}")]
     Store(#[from] StoreError),
     #[error("stored data is invalid: {0}")]
@@ -67,8 +60,8 @@ pub enum GrantError {
     Store(#[from] AuthStoreError),
 }
 
-impl From<rusqlite::Error> for GrantError {
-    fn from(e: rusqlite::Error) -> Self {
+impl From<sqlx::Error> for GrantError {
+    fn from(e: sqlx::Error) -> Self {
         Self::Store(e.into())
     }
 }
@@ -99,7 +92,7 @@ pub struct AuthStore {
 }
 
 impl AuthStore {
-    pub fn new(db: Db, clock: Clock, hasher: Hasher) -> Result<Self, AuthStoreError> {
+    pub async fn new(db: Db, clock: Clock, hasher: Hasher) -> Result<Self, AuthStoreError> {
         let store = Self {
             db,
             clock,
@@ -116,13 +109,14 @@ impl AuthStore {
             token_limiter: RateLimiter::new(20, 900),
             pending: codes::PendingMap::default(),
         };
-        store.seed_clients()?;
+        store.seed_clients().await?;
         Ok(store)
     }
 
-    /// An empty in-memory store with cheap hashing, for unit tests.
-    pub fn open_in_memory(clock: Clock) -> Result<Self, AuthStoreError> {
-        Self::new(Db::open_in_memory()?, clock, Hasher::fast_for_tests())
+    /// An empty isolated test store with cheap hashing, for unit tests.
+    #[doc(hidden)]
+    pub async fn connect_test(clock: Clock) -> Result<Self, AuthStoreError> {
+        Self::new(Db::connect_test().await, clock, Hasher::fast_for_tests()).await
     }
 
     /// 5 failed sign-ins per (username, IP) per 900 s.
@@ -241,28 +235,34 @@ impl AuthStore {
     /// were never used (no grant, no live code) for over 24 hours. Also drops
     /// expired pending requests and stale limiter entries. Returns the number
     /// of database rows deleted.
-    pub fn prune(&self) -> Result<usize, AuthStoreError> {
+    pub async fn prune(&self) -> Result<usize, AuthStoreError> {
         let now = self.now();
-        let mut conn = self.db.conn();
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut deleted = 0;
+        let mut tx = self.db.pool().begin().await?;
+        let mut deleted: u64 = 0;
         for sql in [
-            "DELETE FROM sessions WHERE expires_at <= ?1",
-            "DELETE FROM oauth_codes WHERE expires_at <= ?1",
-            "DELETE FROM oauth_tokens WHERE expires_at <= ?1",
-            "DELETE FROM oauth_grants WHERE expires_at <= ?1",
+            "DELETE FROM sessions WHERE expires_at <= $1",
+            "DELETE FROM oauth_codes WHERE expires_at <= $1",
+            "DELETE FROM oauth_tokens WHERE expires_at <= $1",
+            "DELETE FROM oauth_grants WHERE expires_at <= $1",
         ] {
-            deleted += tx.execute(sql, params![now])?;
+            deleted += sqlx::query(sql)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
         }
-        deleted += tx.execute(
+        deleted += sqlx::query(
             "DELETE FROM oauth_clients
-             WHERE seeded = 0 AND created_at <= ?1 - 86400
+             WHERE seeded = FALSE AND created_at <= $1 - 86400
                AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = oauth_clients.id)
-               AND NOT EXISTS (SELECT 1 FROM oauth_codes c WHERE c.client_id = oauth_clients.id AND c.expires_at > ?1)",
-            params![now],
-        )?;
-        tx.commit()?;
-        drop(conn);
+               AND NOT EXISTS (SELECT 1 FROM oauth_codes c WHERE c.client_id = oauth_clients.id AND c.expires_at > $1)",
+        )
+        .bind(now)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+
         self.prune_pending();
         for limiter in [
             &self.login_limiter,
@@ -275,7 +275,7 @@ impl AuthStore {
         ] {
             limiter.prune(now);
         }
-        Ok(deleted)
+        Ok(deleted as usize)
     }
 
     /// Sets (or clears) the one-time first-admin setup code.
@@ -309,39 +309,73 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn prune_removes_only_expired_rows() {
-        let s = AuthStore::open_in_memory(Clock::manual(1_000)).unwrap();
-        let u = s.create_user("a", "h", Role::Admin).unwrap();
-        let sess = s.create_session(u.id).unwrap();
+    #[tokio::test]
+    async fn prune_removes_only_expired_rows() {
+        let s = AuthStore::connect_test(Clock::manual(1_000)).await.unwrap();
+        let u = s.create_user("a", "h", Role::Admin).await.unwrap();
+        let sess = s.create_session(u.id).await.unwrap();
         let g = s
             .create_grant(u.id, "starstar-cli", Role::Viewer, None)
+            .await
             .unwrap();
-        let _t = s.issue_tokens(&g).unwrap();
+        let _t = s.issue_tokens(&g).await.unwrap();
         let stale = s
             .register_client("old", &["http://127.0.0.1/cb".into()])
+            .await
             .unwrap();
         s.clock().advance(3601); // the access token has expired, the refresh token hasn't
-        assert_eq!(s.prune().unwrap(), 1);
-        assert!(s.client(&stale.id).unwrap().is_some()); // younger than 24 h
+        assert_eq!(s.prune().await.unwrap(), 1);
+        assert!(s.client(&stale.id).await.unwrap().is_some()); // younger than 24 h
         s.clock().advance(7 * 86400);
-        assert_eq!(s.prune().unwrap(), 2); // the expired session and the stale client
-        assert!(s.session_caller(&sess.token).unwrap().is_none());
-        assert!(s.client(&stale.id).unwrap().is_none());
-        assert!(s.client("starstar-cli").unwrap().is_some());
-        assert_eq!(s.list_grants(None).unwrap().len(), 1);
+        assert_eq!(s.prune().await.unwrap(), 2); // the expired session and the stale client
+        assert!(s.session_caller(&sess.token).await.unwrap().is_none());
+        assert!(s.client(&stale.id).await.unwrap().is_none());
+        assert!(s.client("starstar-cli").await.unwrap().is_some());
+        assert_eq!(s.list_grants(None).await.unwrap().len(), 1);
     }
 
-    #[test]
-    fn prune_keeps_clients_that_have_grants_or_live_codes() {
-        let s = AuthStore::open_in_memory(Clock::manual(1_000)).unwrap();
-        let u = s.create_user("a", "h", Role::Admin).unwrap();
+    #[tokio::test]
+    async fn prune_keeps_clients_that_have_grants_or_live_codes() {
+        let s = AuthStore::connect_test(Clock::manual(1_000)).await.unwrap();
+        let u = s.create_user("a", "h", Role::Admin).await.unwrap();
         let used = s
             .register_client("used", &["http://127.0.0.1/cb".into()])
+            .await
             .unwrap();
-        s.create_grant(u.id, &used.id, Role::Viewer, None).unwrap();
+        s.create_grant(u.id, &used.id, Role::Viewer, None)
+            .await
+            .unwrap();
         s.clock().advance(2 * 86400);
-        s.prune().unwrap();
-        assert!(s.client(&used.id).unwrap().is_some());
+        s.prune().await.unwrap();
+        assert!(s.client(&used.id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_clients_with_live_codes_until_expiry() {
+        let s = AuthStore::connect_test(Clock::manual(1_000)).await.unwrap();
+        let u = s.create_user("a", "h", Role::Admin).await.unwrap();
+        let with_code = s
+            .register_client("with-code", &["http://127.0.0.1/cb".into()])
+            .await
+            .unwrap();
+        s.clock().advance(2 * 86400);
+        s.create_code(&codes::CodeParams {
+            client_id: &with_code.id,
+            user_id: u.id,
+            role: Role::Viewer,
+            redirect_uri: "http://127.0.0.1/cb",
+            code_challenge: "challenge",
+            resource: None,
+        })
+        .await
+        .unwrap();
+        // Client is older than 24h, but has a live authorization code.
+        assert_eq!(s.prune().await.unwrap(), 0);
+        assert!(s.client(&with_code.id).await.unwrap().is_some());
+
+        // Once the code expires, prune removes both the expired code and the client.
+        s.clock().advance(codes::CODE_TTL + 1);
+        assert_eq!(s.prune().await.unwrap(), 2);
+        assert!(s.client(&with_code.id).await.unwrap().is_none());
     }
 }

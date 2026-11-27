@@ -44,7 +44,7 @@ fn request_id(r: &TestResponse) -> String {
 
 #[tokio::test]
 async fn authorize_without_session_goes_to_login_then_consent() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     let (_, ch) = pkce();
     let r = get(&app, &authorize_uri("starstar-cli", CB, &ch, "")).await;
     assert_eq!(r.status, 303);
@@ -57,9 +57,9 @@ async fn authorize_without_session_goes_to_login_then_consent() {
 
 #[tokio::test]
 async fn consent_request_shows_defaults() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    create_user(&state, "v", "pw-v-123456", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
+    create_user(&state, "v", "pw-v-123456", Role::Viewer).await;
     let (_, ch) = pkce();
 
     let admin = login(&app, "boss", "pw-boss-123").await;
@@ -82,7 +82,7 @@ async fn consent_request_shows_defaults() {
     assert_eq!(j["max_role"], "admin");
 
     // A dynamic client is self-declared; a viewer is capped at viewer.
-    let dynamic = register_client(&state, "https://app.example.com/cb");
+    let dynamic = register_client(&state, "https://app.example.com/cb").await;
     let viewer = login(&app, "v", "pw-v-123456").await;
     let r = get_as(
         &app,
@@ -119,8 +119,8 @@ async fn consent_request_shows_defaults() {
 
 #[tokio::test]
 async fn allow_redirects_with_code_and_state() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
     let b = login(&app, "boss", "pw-boss-123").await;
     let (_, ch) = pkce();
     let id = request_id(&get_as(&app, &b, &authorize_uri("starstar-cli", CB, &ch, "")).await);
@@ -159,8 +159,8 @@ async fn allow_redirects_with_code_and_state() {
 
 #[tokio::test]
 async fn deny_redirects_with_access_denied() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
     let b = login(&app, "boss", "pw-boss-123").await;
     let (_, ch) = pkce();
     let id = request_id(&get_as(&app, &b, &authorize_uri("starstar-cli", CB, &ch, "")).await);
@@ -180,8 +180,8 @@ async fn deny_redirects_with_access_denied() {
 
 #[tokio::test]
 async fn decision_needs_csrf_and_caps_role() {
-    let (app, state) = test_app();
-    create_user(&state, "op", "pw-op-123456", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "op", "pw-op-123456", Role::Operator).await;
     let b = login(&app, "op", "pw-op-123456").await;
     let (_, ch) = pkce();
     let new_request = |extra: &'static str| {
@@ -246,8 +246,8 @@ async fn decision_needs_csrf_and_caps_role() {
 
 #[tokio::test]
 async fn admin_needs_explicit_allow_admin() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
     let b = login(&app, "boss", "pw-boss-123").await;
     let (_, ch) = pkce();
     let id = request_id(
@@ -291,8 +291,8 @@ async fn admin_needs_explicit_allow_admin() {
 
 #[tokio::test]
 async fn authorize_rejects_unregistered_redirect_without_redirecting() {
-    let (app, state) = test_app();
-    let id = register_client(&state, "http://127.0.0.1:1/cb");
+    let (app, state) = test_app().await;
+    let id = register_client(&state, "http://127.0.0.1:1/cb").await;
     let (_, ch) = pkce();
     let r = get(
         &app,
@@ -315,8 +315,8 @@ async fn authorize_rejects_unregistered_redirect_without_redirecting() {
 
 #[tokio::test]
 async fn authorize_rejects_redirect_onto_own_origin() {
-    let (app, state) = test_app();
-    let id = register_client(&state, "http://127.0.0.1:1/oauth/code");
+    let (app, state) = test_app().await;
+    let id = register_client(&state, "http://127.0.0.1:1/oauth/code").await;
     let (_, ch) = pkce();
     let r = get(
         &app,
@@ -352,8 +352,8 @@ async fn decide(app: &Router, b: &Browser, html: bool, form: &[(&str, &str)]) ->
 
 #[tokio::test]
 async fn a_rejected_role_does_not_burn_the_request() {
-    let (app, state) = test_app();
-    create_user(&state, "op", "pw-op-123456", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "op", "pw-op-123456", Role::Operator).await;
     let b = login(&app, "op", "pw-op-123456").await;
     let (_, ch) = pkce();
     let id = request_id(
@@ -392,8 +392,8 @@ async fn a_rejected_role_does_not_burn_the_request() {
 
 #[tokio::test]
 async fn html_decision_errors_redirect_back_to_the_consent_page() {
-    let (app, state) = test_app();
-    create_user(&state, "op", "pw-op-123456", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "op", "pw-op-123456", Role::Operator).await;
     let b = login(&app, "op", "pw-op-123456").await;
     let (_, ch) = pkce();
     let id = request_id(
@@ -437,7 +437,7 @@ async fn html_decision_errors_redirect_back_to_the_consent_page() {
 
     // Expired request.
     state.auth.clock().advance(601);
-    state.auth.prune().unwrap();
+    state.auth.prune().await.unwrap();
     let r = decide(&app, &b, true, &[("request", &id), ("decision", "deny")]).await;
     assert_eq!((r.status.as_u16(), location(&r)), (303, back("expired")));
 
@@ -460,8 +460,8 @@ async fn html_decision_errors_redirect_back_to_the_consent_page() {
 
 #[tokio::test]
 async fn json_clients_still_get_json_decision_errors() {
-    let (app, state) = test_app();
-    create_user(&state, "op", "pw-op-123456", Role::Operator);
+    let (app, state) = test_app().await;
+    create_user(&state, "op", "pw-op-123456", Role::Operator).await;
     let b = login(&app, "op", "pw-op-123456").await;
     let r = decide(
         &app,
@@ -484,7 +484,7 @@ async fn json_clients_still_get_json_decision_errors() {
 
 #[tokio::test]
 async fn authorize_is_limited_per_ip() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let (_, ch) = pkce();
     for i in 0..30 {
         let r = get(&app, &authorize_uri("starstar-cli", CB, &ch, "")).await;
@@ -500,7 +500,7 @@ async fn authorize_is_limited_per_ip() {
 
 #[tokio::test]
 async fn oversized_state_and_resource_are_invalid_requests() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let (_, ch) = pkce();
     let base = |extra: &str| authorize_uri("starstar-cli", CB, &ch, extra);
 
@@ -536,7 +536,7 @@ async fn oversized_state_and_resource_are_invalid_requests() {
 
 #[tokio::test]
 async fn pkce_and_response_type_errors_redirect() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     let (_, ch) = pkce();
     let base = |q: &str| {
         format!(
@@ -602,8 +602,8 @@ async fn pkce_and_response_type_errors_redirect() {
 
 #[tokio::test]
 async fn pending_request_expires() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
     let b = login(&app, "boss", "pw-boss-123").await;
     let (_, ch) = pkce();
     let id = request_id(&get_as(&app, &b, &authorize_uri("starstar-cli", CB, &ch, "")).await);
@@ -618,7 +618,7 @@ async fn pending_request_expires() {
 
 #[tokio::test]
 async fn pending_requests_are_capped() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let (_, ch) = pkce();
     for i in 0..1000 {
         if i % 30 == 0 {
@@ -654,7 +654,7 @@ async fn cli_code(
     state: &starstar_api::AppState,
     username: &str,
 ) -> (Browser, String) {
-    create_user(state, username, "pw-copy-1234", Role::Admin);
+    create_user(state, username, "pw-copy-1234", Role::Admin).await;
     let b = login(app, username, "pw-copy-1234").await;
     let (_, ch) = pkce();
     let code = authorize_code(
@@ -672,7 +672,7 @@ async fn cli_code(
 
 #[tokio::test]
 async fn copy_code_page() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let (b, code) = cli_code(&app, &state, "boss").await;
     let r = get_as(&app, &b, &format!("/oauth/code?code={code}&state=x")).await;
     assert_eq!(r.status, 200);
@@ -697,9 +697,9 @@ async fn copy_code_page() {
 
 #[tokio::test]
 async fn copy_code_page_shows_nothing_for_foreign_or_unknown_codes() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let (_, code) = cli_code(&app, &state, "boss").await;
-    create_user(&state, "other", "pw-other-123", Role::Admin);
+    create_user(&state, "other", "pw-other-123", Role::Admin).await;
     let other = login(&app, "other", "pw-other-123").await;
     // Another user's code.
     let r = get_as(&app, &other, &format!("/oauth/code?code={code}")).await;
@@ -713,7 +713,7 @@ async fn copy_code_page_shows_nothing_for_foreign_or_unknown_codes() {
     );
 
     // A code that belongs to another client, even for the same user.
-    let id = register_client(&state, "http://127.0.0.1:1/cb");
+    let id = register_client(&state, "http://127.0.0.1:1/cb").await;
     let (_, ch) = pkce();
     let b = login(&app, "boss", "pw-copy-1234").await;
     let foreign = authorize_code(
@@ -732,7 +732,7 @@ async fn copy_code_page_shows_nothing_for_foreign_or_unknown_codes() {
 
 #[tokio::test]
 async fn copy_code_page_hides_used_and_expired_codes() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let (b, code) = cli_code(&app, &state, "boss").await;
     state.auth.clock().advance(61);
     let r = get_as(&app, &b, &format!("/oauth/code?code={code}")).await;
@@ -767,11 +767,11 @@ async fn copy_code_page_hides_used_and_expired_codes() {
 
 #[tokio::test]
 async fn authorize_rejects_loopback_aliases_of_own_origin() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     let (_, ch) = pkce();
     for host in ["localhost", "[::1]"] {
         // A hostile client cannot get a redirect onto our listener under another loopback name.
-        let id = register_client(&state, &format!("http://{host}:1/oauth/code"));
+        let id = register_client(&state, &format!("http://{host}:1/oauth/code")).await;
         let r = get(
             &app,
             &authorize_uri(&id, &format!("http://{host}:8080/oauth/code"), &ch, ""),
@@ -855,8 +855,8 @@ fn pair(r: &TestResponse) -> (String, String) {
 /// Signs in an admin "kerry", runs the CLI flow and returns (app, state,
 /// browser, access, refresh).
 async fn cli_pair() -> (Router, starstar_api::AppState, Browser, String, String) {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let (verifier, challenge) = pkce();
     let code = authorize_code(
@@ -887,8 +887,8 @@ async fn cli_pair() -> (Router, starstar_api::AppState, Browser, String, String)
 
 #[tokio::test]
 async fn pkce_flow_end_to_end() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let (verifier, challenge) = pkce();
     let code = authorize_code(
@@ -931,10 +931,10 @@ async fn pkce_flow_end_to_end() {
 
 #[tokio::test]
 async fn code_exchange_rejections() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
-    let other = register_client(&state, "http://127.0.0.1:1/cb");
+    let other = register_client(&state, "http://127.0.0.1:1/cb").await;
     let fresh = || async {
         let (v, c) = pkce();
         let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
@@ -1000,8 +1000,8 @@ async fn code_exchange_rejections() {
 
 #[tokio::test]
 async fn a_wrong_verifier_burns_the_code() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let (v, c) = pkce();
     let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
@@ -1029,8 +1029,8 @@ async fn a_wrong_verifier_burns_the_code() {
 
 #[tokio::test]
 async fn code_reuse_revokes_the_grant() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let (v, c) = pkce();
     let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
@@ -1051,8 +1051,8 @@ async fn code_reuse_revokes_the_grant() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_exchanges_of_one_code_yield_exactly_one_success() {
-    let (app, state) = test_app();
-    create_user(&state, "kerry", "pw-kerry-123", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin).await;
     let b = login(&app, "kerry", "pw-kerry-123").await;
     let (v, c) = pkce();
     let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
@@ -1088,6 +1088,49 @@ async fn concurrent_exchanges_of_one_code_yield_exactly_one_success() {
     assert_eq!(ok, 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_code_exchange_replay_revokes_the_grant() {
+    let (app, state) = test_app().await;
+    create_user(&state, "kerry", "pw-kerry-123", Role::Admin).await;
+    let b = login(&app, "kerry", "pw-kerry-123").await;
+    let (v, c) = pkce();
+    let code = authorize_code(&app, &b, "starstar-cli", CB, &c, "", Role::Operator).await;
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let spawn_exchange = || {
+        let (app, code, v, barrier) = (app.clone(), code.clone(), v.clone(), barrier.clone());
+        tokio::spawn(async move {
+            barrier.wait().await;
+            token(
+                &app,
+                &[
+                    ("grant_type", "authorization_code"),
+                    ("code", &code),
+                    ("redirect_uri", CB),
+                    ("client_id", "starstar-cli"),
+                    ("code_verifier", &v),
+                ],
+            )
+            .await
+        })
+    };
+    let (a, b2) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(spawn_exchange(), spawn_exchange())
+    })
+    .await
+    .expect("exchange hung");
+    let (a, b2) = (a.unwrap(), b2.unwrap());
+    let mut responses = [a, b2];
+    responses.sort_by_key(|r| r.status.as_u16());
+    assert_eq!(
+        [responses[0].status.as_u16(), responses[1].status.as_u16()],
+        [200, 400]
+    );
+    assert_eq!(responses[1].json()["error"], "invalid_grant");
+    let (at, _) = pair(&responses[0]);
+    assert_eq!(bearer_me(&app, &at).await.status, 401);
+    assert!(state.auth.list_grants(None).await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn refresh_rotates_tokens() {
     let (app, _, _, at1, rt1) = cli_pair().await;
@@ -1120,7 +1163,41 @@ async fn concurrent_refreshes_both_succeed() {
     assert_eq!(bearer_me(&app, &at_b).await.status, 200);
     assert_eq!(refresh(&app, &rt_a).await.status, 200);
     assert_eq!(refresh(&app, &rt_b).await.status, 200);
-    assert_eq!(state.auth.list_grants(None).unwrap().len(), 1);
+    assert_eq!(state.auth.list_grants(None).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_concurrent_refreshes_trigger_reuse_and_revoke_grant() {
+    let (app, state, _, _, rt) = cli_pair().await;
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+    let spawn_refresh = || {
+        let (app, rt, barrier) = (app.clone(), rt.clone(), barrier.clone());
+        tokio::spawn(async move {
+            barrier.wait().await;
+            refresh(&app, &rt).await
+        })
+    };
+    let (r1, r2, r3) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(spawn_refresh(), spawn_refresh(), spawn_refresh())
+    })
+    .await
+    .expect("three concurrent refreshes hung");
+    let mut responses = [r1.unwrap(), r2.unwrap(), r3.unwrap()];
+    responses.sort_by_key(|r| r.status.as_u16());
+    assert_eq!(
+        [
+            responses[0].status.as_u16(),
+            responses[1].status.as_u16(),
+            responses[2].status.as_u16(),
+        ],
+        [200, 200, 400]
+    );
+    assert_eq!(responses[2].json()["error"], "invalid_grant");
+    for ok_resp in &responses[..2] {
+        let (at, _) = pair(ok_resp);
+        assert_eq!(bearer_me(&app, &at).await.status, 401);
+    }
+    assert!(state.auth.list_grants(None).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1145,7 +1222,7 @@ async fn a_second_grace_replay_revokes_the_grant() {
     assert_eq!(r.json()["error"], "invalid_grant");
     assert_eq!(bearer_me(&app, &at_b).await.status, 401);
     assert_eq!(bearer_me(&app, &at_c).await.status, 401);
-    assert!(state.auth.list_grants(None).unwrap().is_empty());
+    assert!(state.auth.list_grants(None).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1163,15 +1240,19 @@ async fn refresh_reuse_after_grace_revokes_grant() {
 #[tokio::test]
 async fn refresh_respects_user_state_and_client() {
     let (app, state, _, _, rt) = cli_pair().await;
-    let other = register_client(&state, "http://127.0.0.1:1/cb");
+    let other = register_client(&state, "http://127.0.0.1:1/cb").await;
     assert_eq!(
         refresh_as(&app, &rt, &other).await.json()["error"],
         "invalid_grant"
     );
     // The wrong client did not hurt the original one.
     let (_, rt2) = pair(&refresh(&app, &rt).await);
-    create_user(&state, "second", "pw-second-12", Role::Admin);
-    state.auth.update_user("kerry", None, Some(true)).unwrap();
+    create_user(&state, "second", "pw-second-12", Role::Admin).await;
+    state
+        .auth
+        .update_user("kerry", None, Some(true))
+        .await
+        .unwrap();
     assert_eq!(refresh(&app, &rt2).await.json()["error"], "invalid_grant");
 }
 
@@ -1226,7 +1307,7 @@ async fn revoke_refresh_kills_grant_and_unknown_is_200() {
     };
     // Unknown token and another client's id: 200 and nothing happens.
     assert_eq!(rev("ss_rt_unknown", None).await.status, 200);
-    let other = register_client(&state, "http://127.0.0.1:1/cb");
+    let other = register_client(&state, "http://127.0.0.1:1/cb").await;
     assert_eq!(rev(&rt, Some(&other)).await.status, 200);
     assert_eq!(bearer_me(&app, &at).await.status, 200);
     // Revoking an access token kills only it.

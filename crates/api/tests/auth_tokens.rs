@@ -20,8 +20,8 @@ async fn me(app: &Router, token: Option<&str>) -> TestResponse {
 
 #[tokio::test]
 async fn me_with_valid_token() {
-    let (app, state) = test_app();
-    let token = token_for(&state, "op", Role::Operator);
+    let (app, state) = test_app().await;
+    let token = token_for(&state, "op", Role::Operator).await;
     let r = me(&app, Some(&token)).await;
     assert_eq!(r.status, 200);
     assert_eq!(r.json(), json!({"username": "op", "role": "operator"}));
@@ -29,7 +29,7 @@ async fn me_with_valid_token() {
 
 #[tokio::test]
 async fn missing_or_bad_token_is_401_with_resource_metadata() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     let r = me(&app, None).await;
     assert_eq!(r.status, 401);
     assert_eq!(
@@ -56,8 +56,8 @@ async fn missing_or_bad_token_is_401_with_resource_metadata() {
 
 #[tokio::test]
 async fn too_low_a_role_is_403_with_an_insufficient_scope_challenge() {
-    let (app, state) = test_app();
-    let viewer = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    let viewer = token_for(&state, "v", Role::Viewer).await;
     let req = |path: &str| {
         Request::get(path)
             .header("authorization", format!("Bearer {viewer}"))
@@ -89,8 +89,8 @@ async fn too_low_a_role_is_403_with_an_insufficient_scope_challenge() {
 
 #[tokio::test]
 async fn bearer_scheme_is_case_insensitive() {
-    let (app, state) = test_app();
-    let token = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    let token = token_for(&state, "v", Role::Viewer).await;
     let r = send(
         &app,
         Request::get("/api/me")
@@ -104,7 +104,7 @@ async fn bearer_scheme_is_case_insensitive() {
 
 #[tokio::test]
 async fn mcp_challenge_points_at_the_mcp_metadata_document() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     for path in ["/mcp", "/mcp/anything"] {
         let r = send(&app, Request::get(path).body(Body::empty()).unwrap()).await;
         assert_eq!(r.status, 401, "{path}");
@@ -117,19 +117,19 @@ async fn mcp_challenge_points_at_the_mcp_metadata_document() {
 
 #[tokio::test]
 async fn disabled_user_token_fails_on_next_request() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    let token = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
+    let token = token_for(&state, "v", Role::Viewer).await;
     assert_eq!(me(&app, Some(&token)).await.status, 200);
-    state.auth.update_user("v", None, Some(true)).unwrap();
+    state.auth.update_user("v", None, Some(true)).await.unwrap();
     assert_eq!(me(&app, Some(&token)).await.status, 401);
 }
 
 #[tokio::test]
 async fn disabled_user_token_fails_on_any_guarded_path_including_mcp() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    let token = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
+    let token = token_for(&state, "v", Role::Viewer).await;
     let get = |path: &str| {
         Request::get(path.to_owned())
             .header("authorization", format!("Bearer {token}"))
@@ -138,7 +138,7 @@ async fn disabled_user_token_fails_on_any_guarded_path_including_mcp() {
     };
     // An enabled user gets past the layer (no route yet is a 404, not a 401).
     assert_ne!(send(&app, get("/mcp")).await.status, 401);
-    state.auth.update_user("v", None, Some(true)).unwrap();
+    state.auth.update_user("v", None, Some(true)).await.unwrap();
     for path in ["/mcp", "/api/me", "/api/printers"] {
         assert_eq!(send(&app, get(path)).await.status, 401, "{path}");
     }
@@ -146,26 +146,28 @@ async fn disabled_user_token_fails_on_any_guarded_path_including_mcp() {
 
 #[tokio::test]
 async fn demoted_user_token_is_capped() {
-    let (app, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    let token = token_for(&state, "a2", Role::Admin);
+    let (app, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
+    let token = token_for(&state, "a2", Role::Admin).await;
     state
         .auth
         .update_user("a2", Some(Role::Viewer), None)
+        .await
         .unwrap();
     assert_eq!(me(&app, Some(&token)).await.json()["role"], "viewer");
 }
 
 #[tokio::test]
 async fn grant_role_caps_user_role() {
-    let (app, state) = test_app();
-    create_user(&state, "a", "pw-a-12345", Role::Admin);
-    let user = state.auth.user_by_name("a").unwrap().unwrap();
+    let (app, state) = test_app().await;
+    create_user(&state, "a", "pw-a-12345", Role::Admin).await;
+    let user = state.auth.user_by_name("a").await.unwrap().unwrap();
     let g = state
         .auth
         .create_grant(user.id, "starstar-cli", Role::Viewer, None)
+        .await
         .unwrap();
-    let t = state.auth.issue_tokens(&g).unwrap();
+    let t = state.auth.issue_tokens(&g).await.unwrap();
     assert_eq!(t.expires_in, 3600);
     assert_eq!(
         me(&app, Some(&t.access_token)).await.json()["role"],
@@ -175,19 +177,20 @@ async fn grant_role_caps_user_role() {
 
 #[tokio::test]
 async fn access_token_expires_after_an_hour_and_grant_after_90_days() {
-    let (app, state) = test_app();
-    let token = token_for(&state, "v", Role::Viewer);
+    let (app, state) = test_app().await;
+    let token = token_for(&state, "v", Role::Viewer).await;
     state.auth.clock().advance(3599);
     assert_eq!(me(&app, Some(&token)).await.status, 200);
     state.auth.clock().advance(2);
     assert_eq!(me(&app, Some(&token)).await.status, 401);
-    let user = state.auth.user_by_name("v").unwrap().unwrap();
+    let user = state.auth.user_by_name("v").await.unwrap().unwrap();
     let g = state
         .auth
         .create_grant(user.id, "starstar-cli", Role::Viewer, None)
+        .await
         .unwrap();
     state.auth.clock().advance(90 * 86400 - 10);
-    let t = state.auth.issue_tokens(&g).unwrap();
+    let t = state.auth.issue_tokens(&g).await.unwrap();
     assert_eq!(me(&app, Some(&t.access_token)).await.status, 200);
     state.auth.clock().advance(11);
     assert_eq!(me(&app, Some(&t.access_token)).await.status, 401);
@@ -195,16 +198,16 @@ async fn access_token_expires_after_an_hour_and_grant_after_90_days() {
 
 #[tokio::test]
 async fn tokens_are_stored_hashed() {
-    let (_, state) = test_app();
-    let token = token_for(&state, "v", Role::Viewer);
-    let hashes = state.auth.token_hashes();
+    let (_, state) = test_app().await;
+    let token = token_for(&state, "v", Role::Viewer).await;
+    let hashes = state.auth.token_hashes().await;
     assert!(hashes.iter().all(|h| h.as_slice() != token.as_bytes()));
     assert!(hashes.contains(&hash_token(&token).to_vec()));
 }
 
 #[tokio::test]
 async fn every_response_forbids_framing() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     for path in ["/api/health", "/api/me", "/nothing-here"] {
         let r = send(&app, Request::get(path).body(Body::empty()).unwrap()).await;
         assert_eq!(r.headers["x-frame-options"], "DENY", "{path}");
@@ -217,10 +220,10 @@ async fn every_response_forbids_framing() {
 
 #[tokio::test]
 async fn deleting_a_user_cascades_to_token_rows() {
-    let (_, state) = test_app();
-    create_user(&state, "boss", "pw-boss-123", Role::Admin);
-    token_for(&state, "v", Role::Viewer);
-    assert_eq!(state.auth.token_hashes().len(), 2); // access + refresh
-    state.auth.remove_user("v").unwrap();
-    assert!(state.auth.token_hashes().is_empty());
+    let (_, state) = test_app().await;
+    create_user(&state, "boss", "pw-boss-123", Role::Admin).await;
+    token_for(&state, "v", Role::Viewer).await;
+    assert_eq!(state.auth.token_hashes().await.len(), 2); // access + refresh
+    state.auth.remove_user("v").await.unwrap();
+    assert!(state.auth.token_hashes().await.is_empty());
 }

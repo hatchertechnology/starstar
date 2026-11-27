@@ -76,7 +76,7 @@ async fn issue(
     form: TokenForm,
 ) -> Result<crate::auth::store::IssuedTokens, OAuthError> {
     let client_id = required(form.client_id, "client_id")?;
-    if state.auth.client(&client_id)?.is_none() {
+    if state.auth.client(&client_id).await?.is_none() {
         return Err(OAuthError::invalid_client("unknown client"));
     }
     match form.grant_type.as_deref() {
@@ -86,11 +86,12 @@ async fn issue(
             let verifier = required(form.code_verifier, "code_verifier")?;
             Ok(state
                 .auth
-                .exchange_code(&code, &client_id, &redirect_uri, &verifier)?)
+                .exchange_code(&code, &client_id, &redirect_uri, &verifier)
+                .await?)
         }
         Some("refresh_token") => {
             let refresh_token = required(form.refresh_token, "refresh_token")?;
-            Ok(state.auth.refresh(&refresh_token, &client_id)?)
+            Ok(state.auth.refresh(&refresh_token, &client_id).await?)
         }
         _ => Err(OAuthError::unsupported_grant_type(
             "grant_type must be authorization_code or refresh_token",
@@ -109,6 +110,9 @@ async fn revoke(
     Form(form): Form<RevokeForm>,
 ) -> Result<Response, OAuthError> {
     let token = required(form.token, "token")?;
-    state.auth.revoke_token(&token, form.client_id.as_deref())?;
+    state
+        .auth
+        .revoke_token(&token, form.client_id.as_deref())
+        .await?;
     Ok(StatusCode::OK.into_response())
 }

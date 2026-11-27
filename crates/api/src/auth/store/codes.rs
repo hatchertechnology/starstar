@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use sqlx::{Postgres, Row, Transaction};
 use starstar_shared::Role;
 
 use super::grants::{IssuedTokens, create_grant_in, issue_tokens_in, parse_role};
@@ -65,6 +65,14 @@ pub fn requested_role(scope: Option<&str>) -> Role {
         .unwrap_or(Role::Operator)
 }
 
+async fn burn_and_fail(
+    tx: Transaction<'_, Postgres>,
+    message: &str,
+) -> Result<IssuedTokens, GrantError> {
+    tx.commit().await?;
+    Err(GrantError::Invalid(message.to_owned()))
+}
+
 impl AuthStore {
     /// Stores a pending request and returns its id, or `None` when
     /// [`PENDING_CAP`] unexpired requests are already waiting.
@@ -116,144 +124,130 @@ impl AuthStore {
     }
 
     /// Creates a single-use authorization code, valid for [`CODE_TTL`].
-    pub fn create_code(&self, p: &CodeParams<'_>) -> Result<String, AuthStoreError> {
+    pub async fn create_code(&self, p: &CodeParams<'_>) -> Result<String, AuthStoreError> {
         let code = random_token("ss_ac_");
-        self.db.conn().execute(
+        sqlx::query(
             "INSERT INTO oauth_codes (code_hash, client_id, user_id, role, redirect_uri, code_challenge, resource, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                hash_token(&code).to_vec(),
-                p.client_id,
-                p.user_id,
-                p.role.as_str(),
-                p.redirect_uri,
-                p.code_challenge,
-                p.resource,
-                self.now() + CODE_TTL
-            ],
-        )?;
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(hash_token(&code).as_slice())
+        .bind(p.client_id)
+        .bind(p.user_id)
+        .bind(p.role.as_str())
+        .bind(p.redirect_uri)
+        .bind(p.code_challenge)
+        .bind(p.resource)
+        .bind(self.now() + CODE_TTL)
+        .execute(self.db.pool())
+        .await?;
         Ok(code)
     }
-}
 
-impl AuthStore {
     /// Whether `code` is a live (unused, unexpired) code issued to the CLI
     /// client for `user_id`. The copy-code page shows nothing else.
-    pub fn code_shown_to(&self, code: &str, user_id: i64) -> Result<bool, AuthStoreError> {
-        let found = self
-            .db
-            .conn()
-            .query_row(
-                "SELECT 1 FROM oauth_codes
-                 WHERE code_hash = ?1 AND client_id = ?2 AND user_id = ?3
-                   AND used_at IS NULL AND expires_at > ?4",
-                params![
-                    hash_token(code).to_vec(),
-                    starstar_shared::auth::CLI_CLIENT_ID,
-                    user_id,
-                    self.now()
-                ],
-                |_| Ok(()),
-            )
-            .optional()?;
+    pub async fn code_shown_to(&self, code: &str, user_id: i64) -> Result<bool, AuthStoreError> {
+        let found: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM oauth_codes
+             WHERE code_hash = $1 AND client_id = $2 AND user_id = $3
+               AND used_at IS NULL AND expires_at > $4",
+        )
+        .bind(hash_token(code).as_slice())
+        .bind(starstar_shared::auth::CLI_CLIENT_ID)
+        .bind(user_id)
+        .bind(self.now())
+        .fetch_optional(self.db.pool())
+        .await?;
         Ok(found.is_some())
     }
 
-    /// Exchanges an authorization code for tokens, in one `IMMEDIATE`
-    /// transaction so concurrent exchanges of one code produce one success.
+    /// Exchanges an authorization code for tokens, locking the code row with
+    /// `SELECT ... FOR UPDATE` so concurrent exchanges of one code serialize and
+    /// produce one success (and replay revokes the created grant).
     ///
     /// A code is burned (marked used) the moment its row is found, before the
     /// client, redirect and verifier checks: a wrong guess spends the code.
     /// Presenting a used code revokes the grant it created.
-    pub fn exchange_code(
+    pub async fn exchange_code(
         &self,
         code: &str,
         client_id: &str,
         redirect_uri: &str,
         verifier: &str,
     ) -> Result<IssuedTokens, GrantError> {
-        let mut conn = self.db.conn();
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let now = self.now();
+        let mut tx = self.db.pool().begin().await?;
+        let hash = hash_token(code);
         let invalid = |m: &str| GrantError::Invalid(m.to_owned());
 
-        let row = tx
-            .query_row(
-                "SELECT client_id, user_id, role, redirect_uri, code_challenge, resource, expires_at, used_at, grant_id
-                 FROM oauth_codes WHERE code_hash = ?1",
-                params![hash_token(code).to_vec()],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
-                        r.get::<_, Option<String>>(5)?,
-                        r.get::<_, i64>(6)?,
-                        r.get::<_, Option<i64>>(7)?,
-                        r.get::<_, Option<String>>(8)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((
-            c_client,
-            user_id,
-            role,
-            c_redirect,
-            challenge,
-            resource,
-            expires_at,
-            used_at,
-            grant_id,
-        )) = row
-        else {
+        let row = sqlx::query(
+            "SELECT client_id, user_id, role, redirect_uri, code_challenge, resource, expires_at, used_at, grant_id
+             FROM oauth_codes WHERE code_hash = $1 FOR UPDATE",
+        )
+        .bind(hash.as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
             return Err(invalid("invalid authorization code"));
         };
+        let now = self.now();
+        let c_client: String = row.try_get(0)?;
+        let user_id: i64 = row.try_get(1)?;
+        let role: String = row.try_get(2)?;
+        let c_redirect: String = row.try_get(3)?;
+        let challenge: String = row.try_get(4)?;
+        let resource: Option<String> = row.try_get(5)?;
+        let expires_at: i64 = row.try_get(6)?;
+        let used_at: Option<i64> = row.try_get(7)?;
+        let grant_id: Option<String> = row.try_get(8)?;
+
         if expires_at <= now {
             return Err(invalid("authorization code expired"));
         }
         if used_at.is_some() {
             if let Some(grant_id) = grant_id {
-                tx.execute("DELETE FROM oauth_grants WHERE id = ?1", params![grant_id])?;
+                sqlx::query("DELETE FROM oauth_grants WHERE id = $1")
+                    .bind(grant_id)
+                    .execute(&mut *tx)
+                    .await?;
             }
-            tx.commit()?;
+            tx.commit().await?;
             return Err(invalid("authorization code already used"));
         }
         // Burn first; every later failure still commits this.
-        tx.execute(
-            "UPDATE oauth_codes SET used_at = ?1 WHERE code_hash = ?2",
-            params![now, hash_token(code).to_vec()],
-        )?;
-        let failure =
-            |tx: rusqlite::Transaction<'_>, m: &str| -> Result<IssuedTokens, GrantError> {
-                tx.commit()?;
-                Err(GrantError::Invalid(m.to_owned()))
-            };
+        sqlx::query("UPDATE oauth_codes SET used_at = $1 WHERE code_hash = $2")
+            .bind(now)
+            .bind(hash.as_slice())
+            .execute(&mut *tx)
+            .await?;
 
         if c_client != client_id || c_redirect != redirect_uri {
-            return failure(
+            return burn_and_fail(
                 tx,
                 "client_id or redirect_uri does not match the authorization",
-            );
+            )
+            .await;
         }
         if !is_valid_pkce_verifier(verifier)
             || !ct_eq(pkce_s256(verifier).as_bytes(), challenge.as_bytes())
         {
-            return failure(tx, "code_verifier does not match the code_challenge");
+            return burn_and_fail(tx, "code_verifier does not match the code_challenge").await;
         }
-        let Some(user) = user_by_id_in(&tx, user_id)?.filter(|u| !u.disabled) else {
-            return failure(tx, "the user is not available");
+        let Some(user) = user_by_id_in(&mut *tx, user_id)
+            .await?
+            .filter(|u| !u.disabled)
+        else {
+            return burn_and_fail(tx, "the user is not available").await;
         };
         let role = parse_role(&role)?.min(user.role);
-        let new_grant = create_grant_in(&tx, now, user_id, client_id, role, resource.as_deref())?;
-        tx.execute(
-            "UPDATE oauth_codes SET grant_id = ?1 WHERE code_hash = ?2",
-            params![new_grant, hash_token(code).to_vec()],
-        )?;
-        let tokens = issue_tokens_in(&tx, now, &new_grant)?;
-        tx.commit()?;
+        let new_grant =
+            create_grant_in(&mut *tx, now, user_id, client_id, role, resource.as_deref()).await?;
+        sqlx::query("UPDATE oauth_codes SET grant_id = $1 WHERE code_hash = $2")
+            .bind(&new_grant)
+            .bind(hash.as_slice())
+            .execute(&mut *tx)
+            .await?;
+        let tokens = issue_tokens_in(&mut tx, now, &new_grant).await?;
+        tx.commit().await?;
         Ok(tokens)
     }
 }
@@ -286,9 +280,9 @@ mod tests {
         assert_eq!(requested_role(Some("profile")), Role::Operator);
     }
 
-    #[test]
-    fn pending_requests_expire_and_are_capped() {
-        let s = AuthStore::open_in_memory(Clock::manual(0)).unwrap();
+    #[tokio::test]
+    async fn pending_requests_expire_and_are_capped() {
+        let s = AuthStore::connect_test(Clock::manual(0)).await.unwrap();
         let id = s.put_pending(pending()).unwrap();
         assert!(s.pending(&id).is_some());
         s.clock().advance(601);

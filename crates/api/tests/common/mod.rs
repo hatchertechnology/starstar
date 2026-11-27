@@ -26,51 +26,54 @@ use tower::ServiceExt;
 
 pub const TEST_START: i64 = 1_800_000_000;
 
-/// A fresh in-memory state with default config.
-pub fn test_state() -> AppState {
-    let db = Db::open_in_memory().unwrap();
+/// A fresh isolated PostgreSQL state with default config.
+pub async fn test_state() -> AppState {
+    let db = Db::connect_test().await;
     AppState {
         store: Arc::new(PrinterStore::from_db(db.clone())),
         auth: Arc::new(
-            AuthStore::new(db, Clock::manual(TEST_START), Hasher::fast_for_tests()).unwrap(),
+            AuthStore::new(db, Clock::manual(TEST_START), Hasher::fast_for_tests())
+                .await
+                .unwrap(),
         ),
         http: http_client().unwrap(),
         config: Arc::new(Config::default()),
     }
 }
 
-/// A router over a fresh in-memory state, plus that state for [`authorize`].
-pub fn test_app() -> (Router, AppState) {
-    let state = test_state();
+/// A router over a fresh isolated PostgreSQL state, plus that state for [`authorize`].
+pub async fn test_app() -> (Router, AppState) {
+    let state = test_state().await;
     (router(state.clone()), state)
 }
 
 /// Creates a user with a real (cheap) password hash.
-pub fn create_user(state: &AppState, username: &str, password: &str, role: Role) {
+pub async fn create_user(state: &AppState, username: &str, password: &str, role: Role) {
     let hash = state.auth.hasher().hash(password);
-    state.auth.create_user(username, &hash, role).unwrap();
+    state.auth.create_user(username, &hash, role).await.unwrap();
 }
 
 /// A bearer access token for `username` (created with password
 /// `test-password` if missing) through a fresh grant on `starstar-cli`.
-pub fn token_for(state: &AppState, username: &str, role: Role) -> String {
-    if state.auth.user_by_name(username).unwrap().is_none() {
-        create_user(state, username, "test-password", role);
+pub async fn token_for(state: &AppState, username: &str, role: Role) -> String {
+    if state.auth.user_by_name(username).await.unwrap().is_none() {
+        create_user(state, username, "test-password", role).await;
     }
-    let user = state.auth.user_by_name(username).unwrap().unwrap();
+    let user = state.auth.user_by_name(username).await.unwrap().unwrap();
     let grant = state
         .auth
         .create_grant(user.id, "starstar-cli", role, None)
+        .await
         .unwrap();
-    state.auth.issue_tokens(&grant).unwrap().access_token
+    state.auth.issue_tokens(&grant).await.unwrap().access_token
 }
 
 static NEXT_USER: AtomicUsize = AtomicUsize::new(0);
 
 /// Adds a real bearer token for a fresh user with `role`.
-pub fn authorize(builder: Builder, state: &AppState, role: Role) -> Builder {
+pub async fn authorize(builder: Builder, state: &AppState, role: Role) -> Builder {
     let n = NEXT_USER.fetch_add(1, Ordering::SeqCst);
-    let token = token_for(state, &format!("test-{role}-{n}"), role);
+    let token = token_for(state, &format!("test-{role}-{n}"), role).await;
     builder.header("authorization", format!("Bearer {token}"))
 }
 
@@ -186,10 +189,11 @@ pub fn pkce() -> (String, String) {
 }
 
 /// Registers a dynamic client with one redirect URI.
-pub fn register_client(state: &AppState, uri: &str) -> String {
+pub async fn register_client(state: &AppState, uri: &str) -> String {
     state
         .auth
         .register_client("Test app", &[uri.to_owned()])
+        .await
         .unwrap()
         .id
 }

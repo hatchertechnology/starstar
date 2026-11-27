@@ -26,7 +26,8 @@ async fn send(
     uri: &str,
     body: Option<Value>,
 ) -> (StatusCode, String) {
-    let mut builder = common::authorize(Request::builder().method(method).uri(uri), state, role);
+    let mut builder =
+        common::authorize(Request::builder().method(method).uri(uri), state, role).await;
     let body = match body {
         Some(json) => {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -60,7 +61,7 @@ fn registration(name: &str, host: &str) -> Value {
 #[tokio::test]
 async fn registers_printer_and_proxies_read_only_calls() {
     let printer = FakePrinter::start().await.addr;
-    let (app, state) = common::test_app();
+    let (app, state) = common::test_app().await;
 
     let (status, body) = send(
         &app,
@@ -158,7 +159,7 @@ async fn registers_printer_and_proxies_read_only_calls() {
 
 #[tokio::test]
 async fn rejects_invalid_requests() {
-    let (app, state) = common::test_app();
+    let (app, state) = common::test_app().await;
 
     let (status, _) = send(
         &app,
@@ -207,7 +208,7 @@ async fn rejects_invalid_requests() {
 
 #[tokio::test]
 async fn unreachable_printer_is_not_registered() {
-    let (app, state) = common::test_app();
+    let (app, state) = common::test_app().await;
 
     let (status, body) = send(
         &app,
@@ -235,7 +236,7 @@ async fn unreachable_printer_is_not_registered() {
 #[tokio::test]
 async fn duplicate_names_are_rejected() {
     let printer = FakePrinter::start().await.addr;
-    let (app, state) = common::test_app();
+    let (app, state) = common::test_app().await;
 
     let (status, _) = send(
         &app,
@@ -330,7 +331,7 @@ async fn fake_rejects_digest_for_another_uri_or_method() {
 
 #[tokio::test]
 async fn rejects_hosts_with_url_parts() {
-    let (app, state) = common::test_app();
+    let (app, state) = common::test_app().await;
     for host in [
         "user@10.0.0.5",
         "10.0.0.5?x",
@@ -360,7 +361,7 @@ async fn rejects_hosts_with_url_parts() {
 #[tokio::test]
 async fn accepts_bracketed_ipv6_hosts() {
     // Validation passes, so the failure is the (unreachable) reachability check.
-    let (app, state) = common::test_app();
+    let (app, state) = common::test_app().await;
     // Unroutable ports, so nothing on the machine can answer.
     for host in ["[::1]:1", "[fe80::1]:1"] {
         let (status, body) = send(

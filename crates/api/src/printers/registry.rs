@@ -22,7 +22,8 @@ pub async fn list_printers(
     caller.require(LIST_PRINTERS_ROLE)?;
     Ok(state
         .store
-        .list()?
+        .list()
+        .await?
         .iter()
         .map(StoredPrinter::summary)
         .collect())
@@ -34,7 +35,7 @@ pub async fn show_printer(
     name: &str,
 ) -> Result<PrinterSummary, ApiError> {
     caller.require(SHOW_PRINTER_ROLE)?;
-    Ok(find(state, name)?.summary())
+    Ok(find(state, name).await?.summary())
 }
 
 pub async fn register_printer(
@@ -44,7 +45,7 @@ pub async fn register_printer(
 ) -> Result<PrinterSummary, ApiError> {
     caller.require(REGISTER_PRINTER_ROLE)?;
     validate_registration(&req)?;
-    if state.store.get(&req.name)?.is_some() {
+    if state.store.get(&req.name).await?.is_some() {
         return Err(ApiError::Conflict(format!(
             "printer `{}` already exists",
             req.name
@@ -65,13 +66,13 @@ pub async fn register_printer(
         .await
         .map_err(|err| with_prefix(ApiError::from(err), "could not verify printer: "))?;
 
-    state.store.insert(printer.clone())?;
+    state.store.insert(printer.clone()).await?;
     Ok(printer.summary())
 }
 
 pub async fn remove_printer(state: &AppState, caller: &Caller, name: &str) -> Result<(), ApiError> {
     caller.require(REMOVE_PRINTER_ROLE)?;
-    if state.store.remove(name)? {
+    if state.store.remove(name).await? {
         Ok(())
     } else {
         Err(ApiError::NotFound(format!("no printer named `{name}`")))

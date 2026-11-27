@@ -15,7 +15,7 @@ const CODE: &str = "ABCDE-FGHJK-MNPQR-STVWX-YZ012-3";
 
 #[tokio::test]
 async fn setup_creates_admin_once_and_discards_code() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     state.auth.set_setup_code(Some(CODE.into()));
     let r = post_json(&app, "/api/setup", body(&CODE.to_lowercase(), "kerry")).await;
     assert_eq!(r.status, 201);
@@ -28,7 +28,13 @@ async fn setup_creates_admin_once_and_discards_code() {
     );
     assert!(!r.body.contains("first-admin-pw"));
     assert_eq!(
-        state.auth.user_by_name("kerry").unwrap().unwrap().role,
+        state
+            .auth
+            .user_by_name("kerry")
+            .await
+            .unwrap()
+            .unwrap()
+            .role,
         Role::Admin
     );
     assert!(!state.auth.setup_code_matches(CODE));
@@ -49,7 +55,7 @@ async fn setup_creates_admin_once_and_discards_code() {
 
 #[tokio::test]
 async fn setup_rejects_wrong_or_missing_code_and_rate_limits() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     // No code set: 403 (and it counts as a failure).
     assert_eq!(
         post_json(&app, "/api/setup", body("anything", "kerry"))
@@ -72,7 +78,7 @@ async fn setup_rejects_wrong_or_missing_code_and_rate_limits() {
             .status,
         429
     );
-    assert_eq!(state.auth.user_count().unwrap(), 0);
+    assert_eq!(state.auth.user_count().await.unwrap(), 0);
     state.auth.clock().advance(901);
     assert_eq!(
         post_json(&app, "/api/setup", body(CODE, "kerry"))
@@ -84,7 +90,7 @@ async fn setup_rejects_wrong_or_missing_code_and_rate_limits() {
 
 #[tokio::test]
 async fn concurrent_setups_create_exactly_one_admin() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     state.auth.set_setup_code(Some(CODE.into()));
     let both = async {
         tokio::join!(
@@ -98,14 +104,14 @@ async fn concurrent_setups_create_exactly_one_admin() {
     let mut statuses = [a.status.as_u16(), b.status.as_u16()];
     statuses.sort();
     assert_eq!(statuses, [201, 409]);
-    assert_eq!(state.auth.user_count().unwrap(), 1);
+    assert_eq!(state.auth.user_count().await.unwrap(), 1);
 }
 
 #[tokio::test]
 async fn setup_after_users_exist_is_409_even_with_right_code() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     state.auth.set_setup_code(Some(CODE.into()));
-    create_user(&state, "a", "pw-a-12345", Role::Admin);
+    create_user(&state, "a", "pw-a-12345", Role::Admin).await;
     assert_eq!(
         post_json(&app, "/api/setup", body(CODE, "b")).await.status,
         409
@@ -114,7 +120,7 @@ async fn setup_after_users_exist_is_409_even_with_right_code() {
 
 #[tokio::test]
 async fn setup_validates_username_and_password() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     state.auth.set_setup_code(Some(CODE.into()));
     assert_eq!(
         post_json(&app, "/api/setup", body(CODE, "Bad Name"))
@@ -136,5 +142,5 @@ async fn setup_validates_username_and_password() {
     )
     .await;
     assert_eq!(r.status, 400);
-    assert_eq!(state.auth.user_count().unwrap(), 0);
+    assert_eq!(state.auth.user_count().await.unwrap(), 0);
 }

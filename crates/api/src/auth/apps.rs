@@ -23,10 +23,11 @@ struct ListQuery {
     all: Option<bool>,
 }
 
-fn user_id(state: &AppState, username: &str) -> Result<i64, ApiError> {
+async fn user_id(state: &AppState, username: &str) -> Result<i64, ApiError> {
     state
         .auth
-        .user_by_name(username)?
+        .user_by_name(username)
+        .await?
         .map(|u| u.id)
         .ok_or_else(|| ApiError::Unauthorized("sign in required".to_owned()))
 }
@@ -40,9 +41,9 @@ async fn list(
         caller.require(Role::Admin)?;
         None
     } else {
-        Some(user_id(&state, &caller.username)?)
+        Some(user_id(&state, &caller.username).await?)
     };
-    Ok(Json(state.auth.list_grants(owner)?))
+    Ok(Json(state.auth.list_grants(owner).await?))
 }
 
 async fn revoke(
@@ -53,9 +54,9 @@ async fn revoke(
     let owner = if caller.role >= Role::Admin {
         None
     } else {
-        Some(user_id(&state, &caller.username)?)
+        Some(user_id(&state, &caller.username).await?)
     };
-    if state.auth.revoke_grant(&id, owner)? {
+    if state.auth.revoke_grant(&id, owner).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound("no app grant with that id".to_owned()))

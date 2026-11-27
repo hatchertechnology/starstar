@@ -83,7 +83,7 @@ fn req(method: &str, path: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn every_guarded_route_needs_credentials() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     for (m, p) in GUARDED
         .iter()
         .copied()
@@ -97,7 +97,7 @@ async fn every_guarded_route_needs_credentials() {
 
 #[tokio::test]
 async fn aliased_paths_are_guarded_too() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     for path in [
         "//api/printers",
         "///api//printers",
@@ -158,7 +158,7 @@ fn registered_routes() -> Vec<String> {
 
 #[tokio::test]
 async fn every_registered_route_is_denied_without_credentials() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     let routes = registered_routes();
     assert!(routes.len() >= 5, "route scan found too little: {routes:?}");
     let mut checked = 0;
@@ -192,7 +192,7 @@ async fn every_registered_route_is_denied_without_credentials() {
 
 #[tokio::test]
 async fn allowlisted_routes_do_not_demand_credentials() {
-    let (app, _) = test_app();
+    let (app, _) = test_app().await;
     assert_eq!(send(&app, req("GET", "/api/health")).await.status, 200);
     // POST /api/session and /api/setup reach their handlers: whatever they
     // answer, it is not require_auth's "sign in required".
@@ -213,16 +213,18 @@ async fn allowlisted_routes_do_not_demand_credentials() {
 
 #[tokio::test]
 async fn auth_routes_enforce_minimum_role() {
-    let (app, state) = test_app();
+    let (app, state) = test_app().await;
     for (m, p, min) in AUTH_ROUTES {
         if let Some(lower) = one_below(*min) {
             let req = authorize(Request::builder().method(*m).uri(*p), &state, lower)
+                .await
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))
                 .unwrap();
             assert_eq!(send(&app, req).await.status, 403, "{m} {p} as {lower}");
         }
         let req = authorize(Request::builder().method(*m).uri(*p), &state, *min)
+            .await
             .header("content-type", "application/json")
             .body(Body::from("{}"))
             .unwrap();

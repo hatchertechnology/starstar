@@ -1,0 +1,9 @@
+.git
+target
+web/node_modules
+web/.nuxt
+web/.output
+web/.data
+web/coverage
+web/dist
+starstar.db*

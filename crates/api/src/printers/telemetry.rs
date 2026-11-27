@@ -17,7 +17,7 @@ pub async fn printer_info(
     printer: &str,
 ) -> Result<PrinterInfo, ApiError> {
     caller.require(PRINTER_INFO_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let client = client(state, &printer);
     let (version, info) = tokio::try_join!(client.version(), client.info())?;
 
@@ -39,7 +39,7 @@ pub async fn printer_status(
     printer: &str,
 ) -> Result<PrinterStatus, ApiError> {
     caller.require(PRINTER_STATUS_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let status = client(state, &printer).status().await?.printer;
 
     Ok(PrinterStatus {
@@ -58,7 +58,7 @@ pub async fn printer_storage(
     printer: &str,
 ) -> Result<Vec<StorageDevice>, ApiError> {
     caller.require(PRINTER_STORAGE_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let list = client(state, &printer).storage().await?;
 
     Ok(list

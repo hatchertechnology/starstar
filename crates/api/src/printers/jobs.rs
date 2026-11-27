@@ -20,7 +20,7 @@ pub async fn current_job(
     printer: &str,
 ) -> Result<Option<Job>, ApiError> {
     caller.require(CURRENT_JOB_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     Ok(client(state, &printer).job().await?.map(Job::from))
 }
 
@@ -31,7 +31,7 @@ pub async fn stop_job(
     id: u64,
 ) -> Result<(), ApiError> {
     caller.require(STOP_JOB_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     Ok(client(state, &printer).stop_job(id).await?)
 }
 
@@ -42,7 +42,7 @@ pub async fn pause_job(
     id: u64,
 ) -> Result<(), ApiError> {
     caller.require(PAUSE_JOB_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     Ok(client(state, &printer).pause_job(id).await?)
 }
 
@@ -53,7 +53,7 @@ pub async fn resume_job(
     id: u64,
 ) -> Result<(), ApiError> {
     caller.require(RESUME_JOB_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     Ok(client(state, &printer).resume_job(id).await?)
 }
 
@@ -64,6 +64,6 @@ pub async fn continue_job(
     id: u64,
 ) -> Result<(), ApiError> {
     caller.require(CONTINUE_JOB_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     Ok(client(state, &printer).continue_job(id).await?)
 }

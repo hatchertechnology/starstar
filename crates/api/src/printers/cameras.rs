@@ -34,7 +34,7 @@ pub async fn list_cameras(
     printer: &str,
 ) -> Result<Vec<Camera>, ApiError> {
     caller.require(LIST_CAMERAS_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     let cameras = client(state, &printer).cameras().await?;
     Ok(cameras.into_iter().map(Camera::from).collect())
 }
@@ -46,7 +46,7 @@ pub async fn camera_detail(
     id: &str,
 ) -> Result<CameraDetail, ApiError> {
     caller.require(CAMERA_DETAIL_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     Ok(client(state, &printer).camera(id).await?.into())
 }
@@ -60,7 +60,7 @@ pub async fn snapshot(
     id: Option<&str>,
 ) -> Result<Option<Snapshot>, ApiError> {
     caller.require(SNAPSHOT_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     if let Some(id) = id {
         validate_camera_id(id)?;
     }
@@ -80,7 +80,7 @@ pub async fn order_cameras(
     ids: Vec<String>,
 ) -> Result<(), ApiError> {
     caller.require(ORDER_CAMERAS_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     ids.iter().try_for_each(|id| validate_camera_id(id))?;
     Ok(client(state, &printer).set_camera_order(&ids).await?)
 }
@@ -93,7 +93,7 @@ pub async fn register_camera(
     settings: CameraSettings,
 ) -> Result<(), ApiError> {
     caller.require(REGISTER_CAMERA_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     let settings = WireCameraSettings::from(settings);
     Ok(client(state, &printer)
@@ -108,7 +108,7 @@ pub async fn remove_camera(
     id: &str,
 ) -> Result<(), ApiError> {
     caller.require(REMOVE_CAMERA_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     Ok(client(state, &printer).remove_camera(id).await?)
 }
@@ -121,7 +121,7 @@ pub async fn update_camera_config(
     settings: CameraSettings,
 ) -> Result<(), ApiError> {
     caller.require(UPDATE_CAMERA_CONFIG_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     let settings = WireCameraSettings::from(settings);
     Ok(client(state, &printer)
@@ -136,7 +136,7 @@ pub async fn reset_camera_config(
     id: &str,
 ) -> Result<(), ApiError> {
     caller.require(RESET_CAMERA_CONFIG_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     Ok(client(state, &printer).reset_camera_config(id).await?)
 }
@@ -148,7 +148,7 @@ pub async fn connect_camera(
     id: &str,
 ) -> Result<(), ApiError> {
     caller.require(CONNECT_CAMERA_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     Ok(client(state, &printer).connect_camera(id).await?)
 }
@@ -160,7 +160,7 @@ pub async fn disconnect_camera(
     id: &str,
 ) -> Result<(), ApiError> {
     caller.require(DISCONNECT_CAMERA_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     Ok(client(state, &printer).disconnect_camera(id).await?)
 }
@@ -173,7 +173,7 @@ pub async fn take_snapshot(
     id: &str,
 ) -> Result<Snapshot, ApiError> {
     caller.require(TAKE_SNAPSHOT_ROLE)?;
-    let printer = find(state, printer)?;
+    let printer = find(state, printer).await?;
     validate_camera_id(id)?;
     let (content_type, bytes) = client(state, &printer).take_snapshot(id).await?;
     Ok(Snapshot {

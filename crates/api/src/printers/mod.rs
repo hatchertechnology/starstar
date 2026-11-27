@@ -10,10 +10,11 @@ use crate::prusalink::PrusaLinkClient;
 use crate::store::StoredPrinter;
 
 /// Looks up a registered printer by name.
-pub(crate) fn find(state: &AppState, name: &str) -> Result<StoredPrinter, ApiError> {
+pub(crate) async fn find(state: &AppState, name: &str) -> Result<StoredPrinter, ApiError> {
     state
         .store
-        .get(name)?
+        .get(name)
+        .await?
         .ok_or_else(|| ApiError::NotFound(format!("no printer named `{name}`")))
 }
 

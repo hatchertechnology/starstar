@@ -10,11 +10,16 @@ use std::time::Duration;
 
 use ipnet::IpNet;
 
-/// Settings for one API process. Not `Debug`: it holds the setup token.
+/// Settings for one API process. Not `Debug`: it holds database credentials and the setup token.
 #[derive(Clone)]
 pub struct Config {
-    /// `STARSTAR_DATABASE`, default `starstar.db`.
-    pub database: String,
+    /// `STARSTAR_DATABASE_URL`, required PostgreSQL connection URL.
+    pub database_url: Option<String>,
+    /// `STARSTAR_DB_MAX_CONNECTIONS`, default 10 (bounded `1..=100`).
+    pub db_max_connections: u32,
+    /// `STARSTAR_DB_CONNECT_TIMEOUT_SECS`, default 30. Startup retry budget
+    /// when PostgreSQL is not yet accepting connections.
+    pub db_connect_timeout: Duration,
     /// `STARSTAR_BIND`, default `127.0.0.1:8080`.
     pub bind: String,
     /// `STARSTAR_PUBLIC_URL`, default `http://127.0.0.1:8080`, without a
@@ -63,6 +68,22 @@ pub fn normalize_public_url(raw: &str) -> String {
         Ok(url) => url.as_str().trim_end_matches('/').to_owned(),
         Err(_) => raw.trim().trim_end_matches('/').to_owned(),
     }
+}
+
+/// Formats a PostgreSQL connection URL for logs without credentials or query
+/// parameters (scheme, host, optional port, and database path only).
+pub fn redact_database_url(raw: &str) -> String {
+    let Ok(url) = url::Url::parse(raw.trim()) else {
+        return "<invalid database URL>".to_owned();
+    };
+    if !matches!(url.scheme(), "postgres" | "postgresql") {
+        return "<invalid database URL>".to_owned();
+    }
+    let Some(host) = url.host_str() else {
+        return "<invalid database URL>".to_owned();
+    };
+    let port = url.port().map_or_else(String::new, |p| format!(":{p}"));
+    format!("{}://{host}{port}{}", url.scheme(), url.path())
 }
 
 /// Splits a `STARSTAR_TRUSTED_PROXIES` value into valid networks and invalid
@@ -121,8 +142,17 @@ impl Config {
             None if bind_is_loopback(&bind) => (loopback_networks(), Vec::new()),
             None => (Vec::new(), Vec::new()),
         };
+        let db_max_connections = var("STARSTAR_DB_MAX_CONNECTIONS")
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|v| (1..=100).contains(v))
+            .unwrap_or(defaults.db_max_connections);
         Self {
-            database: var("STARSTAR_DATABASE").unwrap_or(defaults.database),
+            database_url: var("STARSTAR_DATABASE_URL"),
+            db_max_connections,
+            db_connect_timeout: secs(
+                "STARSTAR_DB_CONNECT_TIMEOUT_SECS",
+                defaults.db_connect_timeout,
+            ),
             bind,
             public_url: var("STARSTAR_PUBLIC_URL")
                 .map(|u| normalize_public_url(&u))
@@ -155,7 +185,9 @@ fn loopback_networks() -> Vec<IpNet> {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            database: "starstar.db".to_owned(),
+            database_url: None,
+            db_max_connections: 10,
+            db_connect_timeout: Duration::from_secs(30),
             bind: "127.0.0.1:8080".to_owned(),
             public_url: "http://127.0.0.1:8080".to_owned(),
             allow_insecure_http: false,
@@ -266,5 +298,46 @@ mod tests {
         let (nets, invalid) = parse_trusted_proxies("10.0.0.1,nope,10.0.0.0/33,,172.16.0.0/12");
         assert_eq!(nets.len(), 2);
         assert_eq!(invalid, ["nope", "10.0.0.0/33"]);
+    }
+
+    #[test]
+    fn database_settings_and_redaction() {
+        let c = Config::from_lookup(|_| None);
+        assert!(c.database_url.is_none());
+        assert_eq!(c.db_max_connections, 10);
+        assert_eq!(c.db_connect_timeout, Duration::from_secs(30));
+
+        let pw = ["s3", "cr3t"].concat();
+        let sample_url = format!("postgres://starstar:{pw}@db:5432/starstar?sslmode=require");
+        let c = Config::from_lookup(lookup(&[
+            ("STARSTAR_DATABASE_URL", sample_url.as_str()),
+            ("STARSTAR_DB_MAX_CONNECTIONS", "25"),
+            ("STARSTAR_DB_CONNECT_TIMEOUT_SECS", "45"),
+        ]));
+        assert_eq!(c.database_url.as_deref(), Some(sample_url.as_str()));
+        assert_eq!(c.db_max_connections, 25);
+        assert_eq!(c.db_connect_timeout, Duration::from_secs(45));
+
+        // Out-of-bounds pool sizes fall back to default.
+        for bad in ["0", "101", "nope"] {
+            let c = Config::from_lookup(lookup(&[("STARSTAR_DB_MAX_CONNECTIONS", bad)]));
+            assert_eq!(c.db_max_connections, 10, "{bad}");
+        }
+
+        let redacted = redact_database_url(&sample_url);
+        assert_eq!(redacted, "postgres://db:5432/starstar");
+        assert!(!redacted.contains(&pw));
+        assert!(!redacted.contains("starstar:"));
+        assert!(!redacted.contains("sslmode"));
+
+        assert_eq!(
+            redact_database_url("postgresql://user:pw@[::1]:54329/testdb"),
+            "postgresql://[::1]:54329/testdb"
+        );
+        assert_eq!(
+            redact_database_url("http://user:pw@host/db"),
+            "<invalid database URL>"
+        );
+        assert_eq!(redact_database_url("starstar.db"), "<invalid database URL>");
     }
 }

@@ -149,7 +149,7 @@ impl From<StoreError> for ApiError {
             StoreError::Duplicate(name) => {
                 Self::Conflict(format!("printer `{name}` already exists"))
             }
-            other => Self::Internal(other.to_string()),
+            _ => Self::Internal("internal error".to_owned()),
         }
     }
 }

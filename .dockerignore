@@ -5,6 +5,9 @@
 !Cargo.lock
 !LICENSE
 !crates/
+crates/*/*
+!crates/*/Cargo.toml
+!crates/*/src/
 !web/
 web/*
 !web/package.json

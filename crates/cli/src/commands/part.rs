@@ -9,7 +9,7 @@ use crate::{
 };
 use reqwest::Method;
 use serde_json::json;
-use starstar_shared::{FileRole, ModelRevision, Part, PartFile, PartSummary, Setup};
+use starstar_shared::{FileRole, ModelRevision, Part, PartFile, PartSummary, Setup, SetupRevision};
 
 fn ep(method: Method, segments: &[&str]) -> Endpoint {
     Endpoint {
@@ -224,6 +224,56 @@ pub fn run(ctx: &Ctx, command: PartCommand) -> CliResult<()> {
             ctx.out
                 .emit_value(&s, || format!("created setup {} (ID {})", s.name, s.id));
         }
+        PartCommand::SetupRev {
+            part,
+            setup,
+            model_rev,
+            note,
+        } => {
+            let p = tree(ctx, resolve(ctx, &part)?)?;
+            let s = p
+                .setups
+                .iter()
+                .find(|s| s.name.to_lowercase() == setup.to_lowercase())
+                .ok_or_else(|| CliError::Usage(format!("setup {setup:?} not found")))?;
+            let model = model_rev
+                .map(|n| {
+                    p.model_revisions
+                        .iter()
+                        .find(|r| r.number == n)
+                        .map(|r| r.id)
+                        .ok_or_else(|| CliError::Usage(format!("model revision {n} not found")))
+                })
+                .transpose()?;
+            let r: SetupRevision = ctx.client()?.send_json(
+                &ep(Method::POST, &["setups", &s.id.to_string(), "revisions"]),
+                &json!({"model_revision":model,"note":note}),
+            )?;
+            ctx.out.emit_value(&r, || {
+                format!("created setup revision {} (ID {})", r.number, r.id)
+            });
+        }
+        PartCommand::Edit { part, name, notes } => {
+            let id = resolve(ctx, &part)?;
+            let mut body = serde_json::Map::new();
+            if let Some(name) = name {
+                body.insert("name".into(), json!(name));
+            }
+            if let Some(notes) = notes {
+                body.insert("notes".into(), json!(notes));
+            }
+            let p: Part = ctx
+                .client()?
+                .send_json(&ep(Method::PATCH, &["parts", &id.to_string()]), &body)?;
+            ctx.out.emit_value(&p, || render_tree(&p));
+        }
+        PartCommand::Label { file_id, profile } => {
+            let f: PartFile = ctx.client()?.send_json(
+                &ep(Method::PATCH, &["files", &file_id.to_string()]),
+                &json!({"profile":if profile.is_empty() { None } else { Some(profile) }}),
+            )?;
+            ctx.out.emit_value(&f, || format!("updated file {}", f.id));
+        }
         PartCommand::Upload {
             part,
             local,
@@ -283,7 +333,7 @@ pub fn run(ctx: &Ctx, command: PartCommand) -> CliResult<()> {
                     let s = p
                         .setups
                         .iter()
-                        .find(|s| s.name == name)
+                        .find(|s| s.name.to_lowercase() == name.to_lowercase())
                         .ok_or_else(|| CliError::Usage(format!("setup {name:?} not found")))?;
                     if let Some(n) = setup_rev {
                         let r =
@@ -302,10 +352,16 @@ pub fn run(ctx: &Ctx, command: PartCommand) -> CliResult<()> {
             if replace {
                 e.query.push(("replace", "true".into()));
             }
-            let bytes = ctx.client()?.upload(&e, &local)?;
-            ctx.out.emit_value(&json!({"name":name,"bytes":bytes}), || {
-                format!("uploaded {name} ({bytes} bytes)")
-            });
+            let (file, created): (PartFile, bool) = ctx.client()?.upload_json(&e, &local)?;
+            ctx.out
+                .emit_value(&json!({"file":file,"created":created}), || {
+                    format!(
+                        "{} {} (ID {})",
+                        if created { "uploaded" } else { "existing" },
+                        file.name,
+                        file.id
+                    )
+                });
         }
         PartCommand::Download { id, output, force } => {
             let client = ctx.client()?;

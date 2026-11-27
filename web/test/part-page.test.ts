@@ -69,8 +69,64 @@ it('clears replacement when the selected file changes', async () => {
 it('lets an operator save the default profile', async () => {
   const { calls } = stubFetch({ 'GET /api/parts/7': { body: part }, 'PATCH /api/setups/3': { body: {} } })
   const w = await mount('operator')
-  await w.find('article input:not([type=checkbox])').setValue('Fast')
-  await w.find('article form').trigger('submit'); await flush()
+  await w.find('form.default-profile input').setValue('Fast')
+  await w.find('form.default-profile').trigger('submit'); await flush()
   expect(JSON.parse(calls.find(c => c.method === 'PATCH')!.body!)).toEqual({ default_profile: 'Fast' })
   w.unmount()
 })
+
+it("creates setup revisions and edits labels", async () => {
+  const { calls } = stubFetch({
+    "GET /api/parts/7": { body: part },
+    "POST /api/setups/3/revisions": { body: {} },
+    "PATCH /api/files/12": { body: {} },
+    "PATCH /api/setups/3": { body: {} },
+    "PATCH /api/parts/7": { body: {} },
+  });
+  const w = await mount("operator");
+  await button(w, "New setup revision").trigger("click");
+  await w.find("form.setup-revision").trigger("submit");
+  await flush();
+  expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!)).toEqual({
+    model_revision: 2,
+    note: null,
+  });
+  await w.find("form.slice-label input").setValue("Speed");
+  await w.find("form.slice-label").trigger("submit");
+  await flush();
+  expect(
+    JSON.parse(
+      calls.find((c) => c.url.includes("/files/12") && c.method === "PATCH")!
+        .body!,
+    ),
+  ).toEqual({ profile: "Speed" });
+  await w.find("form.setup-name input").setValue(" New setup ");
+  await w.find("form.setup-name").trigger("submit");
+  await flush();
+  expect(
+    JSON.parse(
+      calls.find((c) => c.url.includes("/setups/3") && c.method === "PATCH")!
+        .body!,
+    ),
+  ).toEqual({ name: "New setup" });
+  await w.find("form.part-edit input").setValue(" New part ");
+  await w.find("form.part-edit").trigger("submit");
+  await flush();
+  expect(
+    JSON.parse(
+      calls.find((c) => c.url.includes("/parts/7") && c.method === "PATCH")!
+        .body!,
+    ).name,
+  ).toBe("New part");
+  w.unmount();
+});
+it("hides deletion for the last model revision", async () => {
+  stubFetch({
+    "GET /api/parts/7": {
+      body: { ...part, model_revisions: [part.model_revisions[0]] },
+    },
+  });
+  const w = await mount("admin");
+  expect(w.text()).not.toContain("Delete model revision");
+  w.unmount();
+});

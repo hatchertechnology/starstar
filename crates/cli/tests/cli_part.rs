@@ -8,6 +8,9 @@ fn summary(id: i64, name: &str) -> serde_json::Value {
 fn tree() -> serde_json::Value {
     json!({"id":7,"name":"cube","notes":null,"default_setup_id":null,"created_by":"test","created_at":1,"preview_file_id":null,"model_revisions":[{"id":11,"number":1,"note":null,"created_by":"test","created_at":1,"files":[]}],"setups":[{"id":12,"name":"standard","default_profile":null,"behind_model":null,"revisions":[{"id":13,"number":1,"model_revision_id":11,"model_revision_number":1,"note":null,"created_by":"test","created_at":1,"project":null,"slices":[]}]}],"other_files":[]})
 }
+fn uploaded_file() -> serde_json::Value {
+    json!({"id":42,"part_id":7,"model_revision_id":11,"setup_revision_id":null,"role":"source","name":"cube.stl","sha256":"abc","size":3,"meta":null,"parsed":false,"has_preview":false,"target":null,"superseded_by":null,"note":null,"uploaded_by":"test","uploaded_at":1})
+}
 fn setup() -> (FakeApi, tempfile::TempDir) {
     let f = FakeApi::start();
     f.set(
@@ -43,17 +46,18 @@ fn upload_slice_resolves_setup_name() {
     f.set(
         "POST",
         "/api/parts/7/files?name=cube.gcode&role=slice&setup=12",
-        Canned::json(201, json!({})),
+        Canned::json(201, uploaded_file()),
     );
     let o = run(tok(&f, h.path())
         .args(["part", "upload", "7"])
         .arg(&p)
-        .args(["--setup", "standard"]));
+        .args(["--setup", "STANDARD"]));
     assert_eq!(o.code, 0, "{}", o.stderr);
     let requests = f.find(
         "POST",
         "/api/parts/7/files?name=cube.gcode&role=slice&setup=12",
     );
+    assert!(o.stdout.contains("ID 42"));
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].body, b"abc");
     assert_eq!(requests[0].header("content-length"), Some("3"));
@@ -66,7 +70,7 @@ fn upload_infers_role() {
     f.set(
         "POST",
         "/api/parts/7/files?name=cube.stl&role=source",
-        Canned::json(201, json!({})),
+        Canned::json(201, uploaded_file()),
     );
     let o = run(tok(&f, h.path()).args(["part", "upload", "7"]).arg(&p));
     assert_eq!(o.code, 0, "{}", o.stderr);
@@ -244,11 +248,46 @@ fn explicit_setup_revision_is_resolved() {
     let p = h.path().join("cube.gcode");
     std::fs::write(&p, b"abc").unwrap();
     let path = "/api/parts/7/files?name=cube.gcode&role=slice&setup_revision=13";
-    f.set("POST", path, Canned::json(201, json!({})));
+    f.set("POST", path, Canned::json(201, uploaded_file()));
     let o = run(tok(&f, h.path())
         .args(["part", "upload", "id:7"])
         .arg(&p)
         .args(["--setup", "standard", "--setup-rev", "1"]));
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(f.find("POST", path).len(), 1);
+}
+
+#[test]
+fn setup_revision_and_edits_use_resolved_ids() {
+    let (f, h) = setup();
+    f.set("POST", "/api/setups/12/revisions", Canned::json(201, json!({"id":14,"number":2,"model_revision_id":11,"model_revision_number":1,"note":"note","created_by":"test","created_at":1,"project":null,"slices":[]})));
+    f.set("PATCH", "/api/parts/7", Canned::json(200, tree()));
+    let o = run(tok(&f, h.path()).args([
+        "part",
+        "setup-rev",
+        "7",
+        "STANDARD",
+        "--model-rev",
+        "1",
+        "--note",
+        "note",
+    ]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let o = run(tok(&f, h.path()).args(["part", "edit", "7", "--name", "New"]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(f.find("POST", "/api/setups/12/revisions").len(), 1);
+    assert_eq!(f.find("PATCH", "/api/parts/7").len(), 1);
+}
+
+#[test]
+fn label_clears_profile() {
+    let (f, h) = setup();
+    f.set("PATCH", "/api/files/42", Canned::json(200, uploaded_file()));
+    let o = run(tok(&f, h.path()).args(["part", "label", "42", ""]));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let requests = f.find("PATCH", "/api/files/42");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&requests[0].body).unwrap(),
+        json!({"profile":null})
+    );
 }

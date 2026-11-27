@@ -75,6 +75,14 @@ pub(super) async fn lock(tx: &mut Transaction<'_, Postgres>, id: i64) -> Result<
         .await?;
     Ok(())
 }
+fn valid_name(name: &str) -> Result<&str, PartsError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(PartsError::BadRequest("name must not be empty".into()));
+    }
+    Ok(name)
+}
+
 impl PartsStore {
     pub fn new(pool: PgPool, blobs: Arc<Blobs>) -> Self {
         Self { pool, blobs }
@@ -85,6 +93,7 @@ impl PartsStore {
         notes: Option<&str>,
         by: &str,
     ) -> Result<Part, PartsError> {
+        let name = valid_name(name)?;
         let mut tx = self.pool.begin().await?;
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO parts(name,notes,created_by,created_at) VALUES($1,$2,$3,$4) RETURNING id",
@@ -113,6 +122,12 @@ impl PartsStore {
         Ok(part)
     }
     pub async fn update_part(&self, id: i64, patch: PartPatch) -> Result<Part, PartsError> {
+        let name = patch
+            .name
+            .as_deref()
+            .map(valid_name)
+            .transpose()?
+            .map(str::to_owned);
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, id).await?;
         if let Some(Some(setup)) = patch.default_setup_id {
@@ -129,7 +144,7 @@ impl PartsStore {
                 ));
             }
         }
-        let n=sqlx::query("UPDATE parts SET name=COALESCE($2,name), notes=CASE WHEN $3 THEN $4 ELSE notes END, default_setup_id=CASE WHEN $5 THEN $6 ELSE default_setup_id END WHERE id=$1").bind(id).bind(patch.name).bind(patch.notes.is_some()).bind(patch.notes.flatten()).bind(patch.default_setup_id.is_some()).bind(patch.default_setup_id.flatten()).execute(&mut *tx).await?.rows_affected();
+        let n=sqlx::query("UPDATE parts SET name=COALESCE($2,name), notes=CASE WHEN $3 THEN $4 ELSE notes END, default_setup_id=CASE WHEN $5 THEN $6 ELSE default_setup_id END WHERE id=$1").bind(id).bind(name).bind(patch.notes.is_some()).bind(patch.notes.flatten()).bind(patch.default_setup_id.is_some()).bind(patch.default_setup_id.flatten()).execute(&mut *tx).await?.rows_affected();
         if n == 0 {
             return Err(missing("part"));
         }
@@ -144,6 +159,9 @@ impl PartsStore {
         carry: &[i64],
         by: &str,
     ) -> Result<ModelRevision, PartsError> {
+        let mut carry = carry.to_vec();
+        carry.sort_unstable();
+        carry.dedup();
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, part_id).await?;
         let latest: Option<i64> = sqlx::query_scalar(
@@ -153,14 +171,14 @@ impl PartsStore {
         .fetch_optional(&mut *tx)
         .await?;
         let number:i32=sqlx::query_scalar("UPDATE parts SET next_model_revision=next_model_revision+1 WHERE id=$1 RETURNING next_model_revision-1").bind(part_id).fetch_optional(&mut *tx).await?.ok_or_else(||missing("part"))?;
-        let count:i64=sqlx::query_scalar("SELECT count(*) FROM part_files WHERE id=ANY($1) AND part_id=$2 AND model_revision_id=$3").bind(carry).bind(part_id).bind(latest).fetch_one(&mut *tx).await?;
+        let count:i64=sqlx::query_scalar("SELECT count(*) FROM part_files WHERE id=ANY($1) AND part_id=$2 AND model_revision_id=$3").bind(&carry).bind(part_id).bind(latest).fetch_one(&mut *tx).await?;
         if count != carry.len() as i64 {
             return Err(PartsError::BadRequest(
                 "carried files must belong to the latest model revision".into(),
             ));
         }
         let id:i64=sqlx::query_scalar("INSERT INTO model_revisions(part_id,number,note,created_by,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id").bind(part_id).bind(number).bind(note).bind(by).bind(now()).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO part_files(part_id,model_revision_id,setup_revision_id,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,note,superseded_by) SELECT part_id,$1,NULL,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,note,NULL FROM part_files WHERE id=ANY($2)").bind(id).bind(carry).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO part_files(part_id,model_revision_id,setup_revision_id,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,note,superseded_by) SELECT part_id,$1,NULL,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,note,NULL FROM part_files WHERE id=ANY($2)").bind(id).bind(&carry).execute(&mut *tx).await?;
         let model = self.model(&mut tx, id).await?;
         tx.commit().await?;
         Ok(model)
@@ -171,6 +189,7 @@ impl PartsStore {
         name: &str,
         by: &str,
     ) -> Result<Setup, PartsError> {
+        let name = valid_name(name)?;
         let mut tx = self.pool.begin().await?;
         lock(&mut tx, part_id).await?;
         let model: i64 = sqlx::query_scalar(
@@ -192,6 +211,11 @@ impl PartsStore {
         name: Option<String>,
         default_profile: Option<Option<String>>,
     ) -> Result<Setup, PartsError> {
+        let name = name
+            .as_deref()
+            .map(valid_name)
+            .transpose()?
+            .map(str::to_owned);
         let mut tx = self.pool.begin().await?;
         let part: i64 = sqlx::query_scalar("SELECT part_id FROM setups WHERE id=$1")
             .bind(id)
@@ -280,6 +304,16 @@ impl PartsStore {
             .ok_or_else(|| missing(kind))?;
         lock(&mut tx, part).await?;
         if kind == "model revision" {
+            let count: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM model_revisions WHERE part_id=$1")
+                    .bind(part)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if count <= 1 {
+                return Err(PartsError::Conflict(
+                    "a part needs at least one model revision".into(),
+                ));
+            }
             let names:Vec<String>=sqlx::query_scalar("SELECT DISTINCT s.name FROM setups s JOIN setup_revisions r ON r.setup_id=s.id WHERE r.model_revision_id=$1 ORDER BY s.name").bind(id).fetch_all(&mut *tx).await?;
             if !names.is_empty() {
                 return Err(PartsError::InUse(format!(

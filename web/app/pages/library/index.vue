@@ -30,7 +30,7 @@ async function create() {
   creating.value = true
   createError.value = null
   try {
-    const result = await api<Part>(partsPath(), { method: 'POST', json: { name: name.value } })
+    const result = await api<Part>(partsPath(), { method: 'POST', json: { name: name.value.trim() } })
     if (result) await navigateTo(`/library/${result.id}`)
   } catch (e) { createError.value = errorMessage(e) }
   finally { creating.value = false }

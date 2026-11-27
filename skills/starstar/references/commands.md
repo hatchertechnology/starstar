@@ -125,6 +125,20 @@ Usage: starstar part rev [OPTIONS] <PART>
 === part setup
 Usage: starstar part setup [OPTIONS] <PART> <NAME>
 
+=== part setup-rev
+Usage: starstar part setup-rev [OPTIONS] <PART> <SETUP>
+      --model-rev <N>  Model revision number (defaults to latest)
+      --note <TEXT>
+
+=== part edit
+Usage: starstar part edit [OPTIONS] <PART>
+      --name <NAME>
+      --notes <NOTES>
+
+=== part label
+Usage: starstar part label <FILE_ID> <PROFILE>
+An empty profile clears the label. Only slices have profiles.
+
 === part upload
 Usage: starstar part upload [OPTIONS] <PART> <LOCAL>
       --role <ROLE>        Possible values: source, render, project_3mf, slice, other
@@ -134,7 +148,9 @@ Usage: starstar part upload [OPTIONS] <PART> <LOCAL>
       --profile <PROFILE>
       --replace
       --name <NAME>
-When --role is omitted, the role is inferred from the file name extension (using --name if supplied); an unrecognized extension needs --role. Slices and .3mf projects need --setup; --setup-rev requires --setup. Other files without --model-rev stay at part level.
+When --role is omitted, the role is inferred from the file name extension (using --name if supplied); an unrecognized extension needs --role. Slices and .3mf projects need --setup; --setup-rev requires --setup. Other files without --model-rev stay at part level. Setup names match case-insensitively. The result includes the server file and whether it was created or already existed. Profiles on non-slice uploads are ignored.
+
+CLI deletion of individual files, setups and revisions is not available; use the web UI or API. The API rejects deletion of a part’s last model revision. Part and setup names are trimmed and cannot be empty.
 
 === part download
 Usage: starstar part download [OPTIONS] <ID>

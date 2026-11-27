@@ -737,3 +737,80 @@ async fn target_rounding_replaces_only_matching_index_key() {
         Some(d.id)
     );
 }
+
+#[tokio::test]
+async fn empty_setup_revision_must_match_requested_model_for_threemf() {
+    let (_db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    let setup = s.create_setup(p.id, "s", "u").await.unwrap();
+    let old = p.model_revisions[0].id;
+    let latest = s.new_model_revision(p.id, None, &[], "u").await.unwrap();
+    let (file, _) = upload(
+        &s,
+        p.id,
+        FileLevel::Setup(setup.id),
+        FileRole::Project3mf,
+        "a.3mf",
+        vec![1],
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    let p = s.get_part(p.id).await.unwrap();
+    assert_eq!(p.setups[0].revisions[0].id, file.setup_revision_id.unwrap());
+    assert_eq!(p.setups[0].revisions[0].model_revision_id, latest.id);
+    let setup2 = s.create_setup(p.id, "other", "u").await.unwrap();
+    let data = vec![2];
+    let (file, _) = s
+        .add_file(
+            UploadSpec {
+                part_id: p.id,
+                model_revision_id: Some(old),
+                level: FileLevel::Setup(setup2.id),
+                role: FileRole::Project3mf,
+                name: "b.3mf".into(),
+                profile: None,
+                replace: false,
+            },
+            "u",
+            stream::iter([Ok::<_, ()>(Bytes::from(data))]),
+            1,
+            1,
+        )
+        .await
+        .unwrap();
+    let p = s.get_part(p.id).await.unwrap();
+    let setup2 = p.setups.iter().find(|x| x.id == setup2.id).unwrap();
+    assert_eq!(setup2.revisions[0].id, file.setup_revision_id.unwrap());
+    assert_eq!(setup2.revisions[0].model_revision_id, old);
+    assert_eq!(setup2.revisions[0].number, 2);
+}
+
+#[tokio::test]
+async fn non_slice_profile_is_ignored_on_upload_and_rejected_on_edit() {
+    let (db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    let (f, _) = upload(
+        &s,
+        p.id,
+        FileLevel::LatestModelRevision,
+        FileRole::Source,
+        "a.stl",
+        vec![1],
+        Some("speed"),
+        false,
+    )
+    .await
+    .unwrap();
+    let stored: Option<String> = sqlx::query_scalar("SELECT profile FROM part_files WHERE id=$1")
+        .bind(f.id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(stored, None);
+    assert!(matches!(
+        s.update_file(f.id, Some(Some("new".into())), None).await,
+        Err(PartsError::BadRequest(_))
+    ));
+}

@@ -237,6 +237,25 @@ pub enum PartCommand {
     },
     /// Create a setup.
     Setup { part: String, name: String },
+    /// Create a setup revision.
+    SetupRev {
+        part: String,
+        setup: String,
+        #[arg(long)]
+        model_rev: Option<i32>,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Edit a part's name or notes.
+    Edit {
+        part: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Set a slice profile (an empty string clears it).
+    Label { file_id: i64, profile: String },
     /// Upload a part file. Other files without --model-rev stay at part level.
     Upload {
         part: String,

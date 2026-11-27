@@ -8,6 +8,7 @@ const props = defineProps<{
   operator: boolean;
   isDefault: boolean;
   busy: boolean;
+  modelRevisions: { id: number; number: number }[];
 }>();
 defineEmits<{
   upload: [role: "project_3mf" | "slice", setup: number];
@@ -16,8 +17,16 @@ defineEmits<{
   deleteFile: [file: PartFile];
   setDefault: [id: number];
   setProfile: [id: number, profile: string];
+  rename: [id: number, name: string];
+  label: [id: number, profile: string];
+  newRevision: [id: number, model: number, note: string];
 }>();
 const showReplaced = ref(false);
+const showNewRevision = ref(false);
+const selectedModel = ref(props.modelRevisions[0]?.id);
+const revisionNote = ref("");
+const setupName = ref(props.setup.name);
+const sliceLabels = reactive<Record<number, string>>({});
 const profile = ref(props.setup.default_profile ?? "");
 watch(
   () => props.setup.default_profile,
@@ -33,6 +42,18 @@ watch(
       setup.behind_model
     }}</Notice>
     <div class="actions">
+      <button
+        v-if="operator"
+        class="btn btn-secondary"
+        :disabled="busy"
+        @click="
+          selectedModel = modelRevisions[0]?.id;
+          revisionNote = '';
+          showNewRevision = true;
+        "
+      >
+        New setup revision
+      </button>
       <button
         v-if="operator"
         class="btn btn-secondary"
@@ -64,7 +85,41 @@ watch(
       </button>
     </div>
     <form
+      v-if="operator && showNewRevision"
+      class="setup-revision"
+      @submit.prevent="
+        selectedModel &&
+        ($emit('newRevision', setup.id, selectedModel, revisionNote),
+        (showNewRevision = false))
+      "
+    >
+      <label
+        >Model revision
+        <select v-model="selectedModel" :disabled="busy">
+          <option v-for="r in modelRevisions" :key="r.id" :value="r.id">
+            Rev {{ r.number }}
+          </option>
+        </select></label
+      >
+      <label>Note <input v-model="revisionNote" :disabled="busy" /></label>
+      <button :disabled="busy || !selectedModel">Create setup revision</button>
+      <button type="button" :disabled="busy" @click="showNewRevision = false">
+        Cancel
+      </button>
+    </form>
+    <form
       v-if="operator"
+      class="setup-name"
+      @submit.prevent="$emit('rename', setup.id, setupName.trim())"
+    >
+      <label
+        >Setup name
+        <input v-model="setupName" :disabled="busy" required /></label
+      ><button :disabled="busy || !setupName.trim()">Rename setup</button>
+    </form>
+    <form
+      v-if="operator"
+      class="default-profile"
       @submit.prevent="$emit('setProfile', setup.id, profile)"
     >
       <label
@@ -133,7 +188,35 @@ watch(
               </td>
               <td>{{ slice.target?.family ?? "—" }}</td>
               <td>{{ slice.target?.nozzle ?? "—" }}</td>
-              <td>{{ slice.target?.profile ?? "—" }}</td>
+              <td>
+                <form
+                  v-if="operator"
+                  class="slice-label"
+                  @submit.prevent="
+                    $emit(
+                      'label',
+                      slice.id,
+                      sliceLabels[slice.id] ?? slice.target?.profile ?? '',
+                    )
+                  "
+                >
+                  <label
+                    >Profile
+                    <input
+                      :value="
+                        sliceLabels[slice.id] ?? slice.target?.profile ?? ''
+                      "
+                      :disabled="busy"
+                      @input="
+                        sliceLabels[slice.id] = (
+                          $event.target as HTMLInputElement
+                        ).value
+                      "
+                  /></label>
+                  <button :disabled="busy">Save label</button>
+                </form>
+                <span v-else>{{ slice.target?.profile ?? "—" }}</span>
+              </td>
               <td>{{ slice.meta?.filament_type ?? "—" }}</td>
               <td>{{ formatDuration(slice.meta?.estimated_print_time) }}</td>
               <td>{{ formatDate(slice.uploaded_at) }}</td>

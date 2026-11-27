@@ -256,6 +256,29 @@ impl ApiClient {
         Ok(len)
     }
 
+    /// Stream a file and decode the returned JSON and creation status.
+    pub fn upload_json<T: DeserializeOwned>(
+        &self,
+        ep: &Endpoint,
+        file: &Path,
+    ) -> CliResult<(T, bool)> {
+        let response = self.execute(
+            ep,
+            &|rb| {
+                let f = File::open(file)?;
+                let len = f.metadata()?.len();
+                Ok(rb
+                    .timeout(Duration::from_secs(3600))
+                    .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                    .body(reqwest::blocking::Body::sized(f, len)))
+            },
+            120,
+            true,
+        )?;
+        let created = response.status().as_u16() == 201;
+        Ok((decode(response)?, created))
+    }
+
     /// The raw body and content type of a response; 204 means `None`.
     pub fn get_bytes(&self, ep: &Endpoint) -> CliResult<Option<(String, Vec<u8>)>> {
         let resp = self.plain(ep)?;

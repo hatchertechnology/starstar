@@ -184,12 +184,20 @@ impl PartsStore {
                 false
             };
             if let Some(setup) = setup_id {
-                if occupied || revision.is_none() {
-                    let model_id: i64 = if let Some(id) = spec.model_revision_id {
-                        id
-                    } else {
-                        sqlx::query_scalar("SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number DESC LIMIT 1").bind(spec.part_id).fetch_one(&mut *tx).await?
-                    };
+                let model_id: i64 = if let Some(id) = spec.model_revision_id {
+                    id
+                } else {
+                    sqlx::query_scalar("SELECT id FROM model_revisions WHERE part_id=$1 ORDER BY number DESC LIMIT 1").bind(spec.part_id).fetch_one(&mut *tx).await?
+                };
+                let revision_model: Option<i64> = if let Some(id) = revision {
+                    sqlx::query_scalar("SELECT model_revision_id FROM setup_revisions WHERE id=$1")
+                        .bind(id)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                } else {
+                    None
+                };
+                if occupied || revision_model != Some(model_id) {
                     let number:i32=sqlx::query_scalar("UPDATE setups SET next_revision=next_revision+1 WHERE id=$1 RETURNING next_revision-1").bind(setup).fetch_one(&mut *tx).await?;
                     revision=Some(sqlx::query_scalar("INSERT INTO setup_revisions(part_id,setup_id,number,model_revision_id,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id").bind(spec.part_id).bind(setup).bind(number).bind(model_id).bind(by).bind(now()).fetch_one(&mut *tx).await?);
                 }
@@ -215,10 +223,13 @@ impl PartsStore {
                 .bind(raw_nozzle)
                 .fetch_one(&mut *tx)
                 .await?;
-        let profile = spec
-            .profile
-            .or_else(|| meta.as_ref().and_then(|m| m.print_settings_id.clone()))
-            .and_then(normalize_profile);
+        let profile = if spec.role == FileRole::Slice {
+            spec.profile
+                .or_else(|| meta.as_ref().and_then(|m| m.print_settings_id.clone()))
+                .and_then(normalize_profile)
+        } else {
+            None
+        };
         let family_str = family.map(|f| match f {
             PrinterFamily::Mk4 => "mk4",
             PrinterFamily::Mini => "mini",
@@ -317,6 +328,11 @@ impl PartsStore {
                 .into_iter()
                 .next()
                 .ok_or_else(|| missing("file"))?;
+            if file.role != FileRole::Slice {
+                return Err(PartsError::BadRequest(
+                    "profile is only valid for slices".into(),
+                ));
+            }
             if file.superseded_by.is_none()
                 && let (Some(revision), Some(target)) = (file.setup_revision_id, file.target)
                 && let (Some(family), Some(nozzle)) = (target.family, target.nozzle)

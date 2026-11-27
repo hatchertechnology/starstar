@@ -67,6 +67,7 @@ async fn delete_model_revision_in_use_names_setup() {
     let (_db, s) = setup().await;
     let p = s.create_part("p", None, "u").await.unwrap();
     s.create_setup(p.id, "Single", "u").await.unwrap();
+    s.new_model_revision(p.id, None, &[], "u").await.unwrap();
     assert!(
         s.delete_model_revision(p.model_revisions[0].id)
             .await
@@ -138,10 +139,10 @@ async fn deleting_revision_preserves_shared_blob_until_last_reference() {
     let path = s.blobs.path(&sha);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, b"blob").unwrap();
-    let new = s.new_model_revision(p.id, None, &[id], "u").await.unwrap();
+    let _new = s.new_model_revision(p.id, None, &[id], "u").await.unwrap();
     s.delete_model_revision(old).await.unwrap();
     assert!(path.exists());
-    s.delete_model_revision(new.id).await.unwrap();
+    s.delete_part(p.id).await.unwrap();
     assert!(!path.exists());
     let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM library_cleanup")
         .fetch_one(db.pool())
@@ -180,4 +181,71 @@ async fn setup_reports_when_model_is_newer() {
         p.setups[0].behind_model.as_deref(),
         Some("on model rev 1; latest is rev 2")
     );
+}
+
+#[tokio::test]
+async fn names_are_trimmed_and_empty_names_rejected() {
+    let (_db, s) = setup().await;
+    assert!(matches!(
+        s.create_part("  ", None, "u").await,
+        Err(PartsError::BadRequest(_))
+    ));
+    let p = s.create_part("  part  ", None, "u").await.unwrap();
+    assert_eq!(p.name, "part");
+    assert!(matches!(
+        s.update_part(
+            p.id,
+            PartPatch {
+                name: Some("  ".into()),
+                ..Default::default()
+            }
+        )
+        .await,
+        Err(PartsError::BadRequest(_))
+    ));
+    assert_eq!(
+        s.update_part(
+            p.id,
+            PartPatch {
+                name: Some(" renamed ".into()),
+                ..Default::default()
+            }
+        )
+        .await
+        .unwrap()
+        .name,
+        "renamed"
+    );
+    assert!(matches!(
+        s.create_setup(p.id, "  ", "u").await,
+        Err(PartsError::BadRequest(_))
+    ));
+    let setup = s.create_setup(p.id, " setup ", "u").await.unwrap();
+    assert_eq!(setup.name, "setup");
+    assert!(matches!(
+        s.update_setup(setup.id, Some(" ".into()), None).await,
+        Err(PartsError::BadRequest(_))
+    ));
+    assert_eq!(
+        s.update_setup(setup.id, Some(" new ".into()), None)
+            .await
+            .unwrap()
+            .name,
+        "new"
+    );
+}
+
+#[tokio::test]
+async fn last_model_revision_cannot_be_deleted_and_carry_deduplicates() {
+    let (db, s) = setup().await;
+    let p = s.create_part("p", None, "u").await.unwrap();
+    assert!(
+        matches!(s.delete_model_revision(p.model_revisions[0].id).await, Err(PartsError::Conflict(message)) if message == "a part needs at least one model revision")
+    );
+    let id = file(&db, p.id, p.model_revisions[0].id).await;
+    let rev = s
+        .new_model_revision(p.id, None, &[id, id], "u")
+        .await
+        .unwrap();
+    assert_eq!(rev.files.len(), 1);
 }

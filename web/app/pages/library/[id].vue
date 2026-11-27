@@ -14,7 +14,9 @@ const selected = ref<number | null>(null),
   showSetup = ref(false),
   setupName = ref(""),
   note = ref(""),
-  carry = ref<number[]>([]);
+  carry = ref<number[]>([]),
+  editName = ref(""),
+  editNotes = ref("");
 const uploadRole = ref<
     "source" | "render" | "other" | "project_3mf" | "slice" | null
   >(null),
@@ -55,8 +57,11 @@ useHead({
 });
 async function load() {
   try {
-    part.value = await api<Part>(partsPath(id));
+    const loaded = await api<Part>(partsPath(id));
+    part.value = loaded;
     error.value = null;
+    editName.value = loaded?.name ?? "";
+    editNotes.value = loaded?.notes ?? "";
   } catch (e) {
     error.value = errorMessage(e);
   }
@@ -218,8 +223,7 @@ async function remove() {
 <template>
   <section>
     <p><NuxtLink to="/library">← Library</NuxtLink></p>
-    <Notice v-if="error" kind="error">{{ error }}</Notice
-    ><template v-if="part"
+    <Notice v-if="error" kind="error">{{ error }}</Notice><template v-if="part"
       ><header>
         <img
           v-if="part.preview_file_id !== null"
@@ -230,6 +234,19 @@ async function remove() {
         <p v-else class="muted">No preview available</p>
         <h1>{{ part.name }}</h1>
         <p>{{ part.notes }}</p>
+        <form
+          v-if="session.can('operator')"
+          class="part-edit"
+          @submit.prevent="
+            patch(partsPath(id), { name: editName.trim(), notes: editNotes })
+          "
+        >
+          <label
+            >Part name <input v-model="editName" :disabled="busy" required
+          /></label>
+          <label>Notes <textarea v-model="editNotes" :disabled="busy" /></label>
+          <button :disabled="busy || !editName.trim()">Save part</button>
+        </form>
         <button
           v-if="session.can('admin')"
           class="btn btn-secondary"
@@ -265,7 +282,9 @@ async function remove() {
         >
           New revision</button
         ><button
-          v-if="session.can('admin') && revision"
+          v-if="
+            session.can('admin') && revision && part.model_revisions.length > 1
+          "
           class="btn btn-secondary"
           :disabled="busy"
           @click="
@@ -322,11 +341,23 @@ async function remove() {
         v-for="s in part.setups"
         :key="s.id"
         :setup="s"
+        :model-revisions="part.model_revisions"
         :admin="session.can('admin')"
         :operator="session.can('operator')"
         :is-default="part.default_setup_id === s.id"
         :busy="busy"
         @upload="startUpload"
+        @new-revision="
+          (sid, model, value) =>
+            write(setupsPath(sid, 'revisions'), {
+              model_revision: model,
+              note: value || null,
+            })
+        "
+        @rename="(sid, name) => patch(setupsPath(sid), { name })"
+        @label="
+          (fid, value) => patch(filesPath(fid), { profile: value || null })
+        "
         @delete-setup="deleteSetup"
         @delete-file="deleteFile"
         @delete-revision="
@@ -376,7 +407,9 @@ async function remove() {
       <form
         v-if="showSetup"
         class="panel"
-        @submit.prevent="write(partsPath(id, 'setups'), { name: setupName })"
+        @submit.prevent="
+          write(partsPath(id, 'setups'), { name: setupName.trim() })
+        "
       >
         <h2>New setup</h2>
         <label

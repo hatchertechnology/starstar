@@ -44,6 +44,7 @@ const GUARDED: &[(&str, &str)] = &[
     ("PUT", "/api/printers/mk4/files/usb/cube-12mm.bgcode"),
     ("DELETE", "/api/printers/mk4/files/usb/cube-12mm.bgcode"),
     ("POST", "/api/printers/mk4/files/usb/cube-12mm.bgcode/print"),
+    ("GET", "/api/printers/mk4/thumbnails/usb/cube-12mm.bgcode"),
     ("GET", "/api/printers/mk4/cameras"),
     ("GET", "/api/printers/mk4/cameras/snap"),
     ("GET", "/api/printers/mk4/cameras/cam1"),

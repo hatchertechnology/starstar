@@ -25,6 +25,27 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_file)
                 .put(upload_file),
         )
+        .route(
+            "/api/printers/{name}/thumbnails/{storage}/{*path}",
+            get(file_thumbnail),
+        )
+}
+
+async fn file_thumbnail(
+    Viewer(caller): Viewer,
+    State(state): State<AppState>,
+    Path((name, storage, path)): Path<(String, String, String)>,
+) -> Result<Response, ApiError> {
+    let (content_type, bytes) =
+        files::file_thumbnail(&state, &caller, &name, &storage, &path).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "private, max-age=300".to_owned()),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 async fn storage_root(

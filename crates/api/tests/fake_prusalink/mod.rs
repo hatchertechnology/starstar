@@ -291,7 +291,7 @@ fn default_for(method: &Method, uri: &str) -> Option<Canned> {
         ),
         ("GET", "/api/v1/files/usb/cube-12mm.bgcode") => Canned::json(
             200,
-            json!({"name":"cube-12mm.bgcode","type":"PRINT_FILE","read_only":false,"size":123456,"m_timestamp":1700000000,"meta":{"estimated_print_time":3000,"filament_type":"PLA","layer_height":0.2,"nozzle_diameter":0.4,"printer_model":"MK4","temperature":215,"bed_temperature":60,"filament used [g]":3.1,"filament used [mm]":1040.5}}),
+            json!({"name":"cube-12mm.bgcode","type":"PRINT_FILE","read_only":false,"size":123456,"m_timestamp":1700000000,"meta":{"estimated_print_time":3000,"filament_type":"PLA","layer_height":0.2,"nozzle_diameter":0.4,"printer_model":"MK4","temperature":215,"bed_temperature":60,"filament used [g]":3.1,"filament used [mm]":1040.5},"refs":{"thumbnail":"/thumb/l/usb/CUBE12~1.BGC","download":"/usb/CUBE12~1.BGC"}}),
         ),
         ("HEAD", "/api/v1/files/usb/cube-12mm.bgcode") => Canned::empty(200)
             .header("Read-Only", "false")
@@ -308,6 +308,7 @@ fn default_for(method: &Method, uri: &str) -> Option<Canned> {
         ("POST" | "DELETE", "/api/v1/cameras/cam1")
         | ("PATCH" | "DELETE", "/api/v1/cameras/cam1/config")
         | ("POST" | "DELETE", "/api/v1/cameras/cam1/connection") => Canned::empty(200),
+        ("GET", "/thumb/l/usb/CUBE12~1.BGC") => png(),
         ("GET", "/api/v1/cameras/snap" | "/api/v1/cameras/cam1/snap")
         | ("POST", "/api/v1/cameras/cam1/snap") => png(),
         ("GET", "/api/v1/update/prusalink") => {

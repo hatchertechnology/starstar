@@ -161,6 +161,12 @@ fn operations(fake_host: String) -> Vec<(&'static str, Role, Role, Op)> {
             op(|s, c| async move { files::file_info(&s, &c, P, "usb", Some(F)).await }),
         ),
         (
+            "file_thumbnail",
+            Role::Viewer,
+            files::FILE_INFO_ROLE,
+            op(|s, c| async move { files::file_thumbnail(&s, &c, P, "usb", F).await }),
+        ),
+        (
             "file_state",
             Role::Viewer,
             files::FILE_STATE_ROLE,
@@ -286,7 +292,7 @@ fn operations(fake_host: String) -> Vec<(&'static str, Role, Role, Op)> {
 async fn operations_enforce_roles() {
     let probe = TestApi::start().await;
     let count = operations(probe.fake.addr.to_string()).len();
-    assert_eq!(count, 32, "one entry per printers:: operation");
+    assert_eq!(count, 33, "one entry per printers:: operation");
 
     for index in 0..count {
         // A fresh printer per operation, since some of them remove or add one.
@@ -339,6 +345,11 @@ fn routes() -> Vec<(Method, &'static str, Role)> {
         (
             M::HEAD,
             "/api/printers/mk4/files/usb/cube-12mm.bgcode",
+            Viewer,
+        ),
+        (
+            M::GET,
+            "/api/printers/mk4/thumbnails/usb/cube-12mm.bgcode",
             Viewer,
         ),
         (M::GET, "/api/printers/mk4/cameras", Viewer),
@@ -465,7 +476,7 @@ fn is_routing_failure(r: &TestResponse) -> bool {
 #[tokio::test]
 async fn role_table_has_every_route() {
     let routes = routes();
-    assert_eq!(routes.len(), 34);
+    assert_eq!(routes.len(), 35);
     for (method, uri, _) in &routes {
         let api = TestApi::start().await;
         let r = send_row(&api, Some(Role::Admin), method, uri).await;

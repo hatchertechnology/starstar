@@ -30,6 +30,31 @@ pub async fn file_info(
     Ok(client.file_info(&storage, &segments).await?.into())
 }
 
+/// The file's preview image from the printer: (content type, bytes).
+/// 404 when the printer reports no thumbnail, or a link that is not a path
+/// on the same printer.
+pub async fn file_thumbnail(
+    state: &AppState,
+    caller: &Caller,
+    printer: &str,
+    storage: &str,
+    path: &str,
+) -> Result<(String, axum::body::Bytes), ApiError> {
+    caller.require(FILE_INFO_ROLE)?;
+    let printer = find(state, printer).await?;
+    let segments = file_segments(path)?;
+    let client = client(state, &printer);
+    let storage = resolve_storage(&client, storage).await?;
+    let file = client.file_info(&storage, &segments).await?;
+    let no_preview = || ApiError::NotFound("file has no preview".to_owned());
+    let link = file.thumbnail_ref().ok_or_else(no_preview)?;
+    match client.thumbnail(link).await {
+        Ok(image) => Ok(image),
+        Err(crate::prusalink::PrusaError::Decode(_)) => Err(no_preview()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// What a `HEAD` on the file says: read-only and currently being printed.
 pub async fn file_state(
     state: &AppState,

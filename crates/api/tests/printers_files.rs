@@ -220,3 +220,121 @@ async fn deleting_printed_file_is_409() {
             .contains("being printed")
     );
 }
+
+#[tokio::test]
+async fn file_info_reports_has_thumbnail() {
+    let api = TestApi::start().await;
+    let r = api
+        .get(Role::Viewer, "/api/printers/mk4/files/usb/cube-12mm.bgcode")
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["has_thumbnail"], true);
+}
+
+const THUMB: &str = "/api/printers/mk4/thumbnails/usb/cube-12mm.bgcode";
+
+fn thumb_requests(api: &TestApi) -> usize {
+    api.fake
+        .requests()
+        .iter()
+        .filter(|q| q.uri.starts_with("/thumb/"))
+        .count()
+}
+
+#[tokio::test]
+async fn serves_thumbnail() {
+    let api = TestApi::start().await;
+    let r = api.get(Role::Viewer, THUMB).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.headers["content-type"], "image/png");
+    assert_eq!(r.headers["cache-control"], "private, max-age=300");
+    assert!(r.body.starts_with(b"\x89PNG"));
+    assert!(
+        api.fake
+            .authorized(Method::GET)
+            .iter()
+            .any(|q| q.uri == "/thumb/l/usb/CUBE12~1.BGC")
+    );
+}
+
+#[tokio::test]
+async fn thumbnail_missing_is_404() {
+    let api = TestApi::start().await;
+    api.fake.set(
+        Method::GET,
+        "/api/v1/files/usb/cube-12mm.bgcode",
+        Canned::json(200, json!({"name":"cube-12mm.bgcode","type":"PRINT_FILE"})),
+    );
+    let r = api.get(Role::Viewer, THUMB).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text());
+    assert_eq!(thumb_requests(&api), 0);
+}
+
+#[tokio::test]
+async fn thumbnail_unsafe_link_is_404() {
+    let api = TestApi::start().await;
+    for link in [
+        "http://evil/x.png",
+        "//evil/x.png",
+        "/thumb/../api/v1/status",
+    ] {
+        api.fake.set(
+            Method::GET,
+            "/api/v1/files/usb/cube-12mm.bgcode",
+            Canned::json(
+                200,
+                json!({"name":"cube-12mm.bgcode","type":"PRINT_FILE","refs":{"thumbnail":link}}),
+            ),
+        );
+        let r = api.get(Role::Viewer, THUMB).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{link}: {}", r.text());
+    }
+    assert!(
+        api.fake.requests().iter().all(|q| matches!(
+            q.uri.as_str(),
+            "/api/v1/storage" | "/api/v1/files/usb/cube-12mm.bgcode"
+        )),
+        "contacted something other than file info: {:?}",
+        api.fake
+            .requests()
+            .iter()
+            .map(|q| q.uri.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn thumbnail_unknown_file_is_404() {
+    let api = TestApi::start().await;
+    let r = api
+        .get(Role::Viewer, "/api/printers/mk4/thumbnails/usb/nope.bgcode")
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text());
+}
+
+#[tokio::test]
+async fn thumbnail_encoded_path_round_trips() {
+    let api = TestApi::start().await;
+    let up = "/api/v1/files/usb/My%20Parts/caf%C3%A9%20%231%3F%25.bgcode";
+    api.fake.set(
+        Method::GET,
+        up,
+        Canned::json(
+            200,
+            json!({"name":"CAFE~1.BGC","type":"PRINT_FILE","refs":{"thumbnail":"/thumb/l/usb/MYPART~1/CAFE~1.BGC"}}),
+        ),
+    );
+    api.fake.set(
+        Method::GET,
+        "/thumb/l/usb/MYPART~1/CAFE~1.BGC",
+        Canned::bytes(200, "image/png", b"\x89PNG\r\n\x1a\nfake".to_vec()),
+    );
+    let r = api
+        .get(
+            Role::Viewer,
+            "/api/printers/mk4/thumbnails/usb/My%20Parts/caf%C3%A9%20%231%3F%25.bgcode",
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(api.fake.authorized(Method::GET).iter().any(|q| q.uri == up));
+}

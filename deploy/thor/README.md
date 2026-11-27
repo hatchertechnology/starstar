@@ -16,7 +16,7 @@ These manifests run Starstar on the Thor k3s cluster, reachable only on the tail
 
 ## Rules
 
-- **Always** pass `--context thor`. The default kube context is a different cluster.
+- **Always** pass `--context thor` to cluster-facing commands. `kubectl kustomize` is offline and does not use a context. The default kube context is a different cluster.
 - **Always** run `deploy/thor/preflight.sh thor` and get `PREFLIGHT OK` before `apply -k`, on the first deploy and on every upgrade.
 - **Never** use `kubectl apply --prune` on this directory.
 - **Never** run `kubectl delete -k deploy/thor/`, and never delete the namespace or Cluster `starstar-pg`. The PVC belongs to the Cluster and `local-path` has reclaim policy `Delete`. Deleting the Cluster deletes the database. **There is no off-node backup** (see [Backups](#backups-not-yet-configured)).
@@ -46,7 +46,7 @@ Set the digest in `kustomization.yaml` from the CI publish record. From the repo
 deploy/thor/first-deploy.sh thor
 ```
 
-It runs the image preflight, applies namespace and policies, performs the full target-namespace server dry run, then applies and waits for the database and its generated secrets before applying the application. Any failed command stops the sequence. The server dry run checks admission, not Pod Security of subsequently created pods. On failure inspect namespace events and pods/jobs; see Troubleshooting. A retry with an existing Deployment and no Ready pod needs a verified rollback image; pass that full image as the second argument to the first-deploy script.
+It runs the image preflight, applies namespace and policies, performs the full target-namespace server dry run, then applies and waits for the database and its generated secrets before applying the application. Any failed command stops the sequence. The server dry run checks admission, not Pod Security of subsequently created pods. On failure inspect namespace events and pods/jobs; see Troubleshooting. If the Deployment exists but has never had a Ready pod and there is no rollback record, preflight explicitly permits the first-deploy retry path. Confirm that history from the deploy records; preflight cannot establish it from current pods. To reset a failed first deployment, run `kubectl --context thor -n starstar delete deployment starstar-api`, then retry. Never delete the Cluster or PVC. If a Ready pod existed previously, use the upgrade path and pass its verified rollback image; do not treat a failed upgrade as a first deployment.
 
 ### 4. Post-deploy verification
 
@@ -67,9 +67,9 @@ The code is valid only until the first admin exists. It changes on every restart
 
 ## Post-deploy verification
 
-Run these after every first deploy, and P1, P2 and P6 after an upgrade that changes `networkpolicy.yaml`, `ingress.yaml`, `database.yaml` or the TLS environment. Record each result. Each block stops at its first failure.
+Run these after every first deploy. After an upgrade that changes `networkpolicy.yaml`, run P1–P6; after changes to `ingress.yaml`, `database.yaml` or the TLS environment, run P1, P2 and P6. Record each result. Each block stops at its first failure.
 
-For a replacement cluster, set `CLUSTER="starstar-pg2"` before these checks and change the P3 temporary policy selector to that cluster. Confirm positive controls for DB 5432 (API TLS session), 8000 (P4 operator status), and API 8080 (P1 health) before interpreting P3 denials. Define the helper and variables once (a function, because zsh does not word-split `$VAR`). The primary is resolved by label, never by a fixed pod name. Re-run this after any pod restart:
+Confirm positive controls for DB 5432 (API TLS session), 8000 (P4 operator status), and API 8080 (P1 health) before interpreting P3 denials. Define the helper and variables once (a function, because zsh does not word-split `$VAR`). The primary is resolved by label, never by a fixed pod name. Re-run this after any pod restart:
 
 ```sh
 kss() { kubectl --context thor -n starstar "$@"; }
@@ -137,7 +137,7 @@ PGIP=$(kss get pod "$PG" -o jsonpath='{.status.podIP}') \
 ```
 
 ```sh
-kss apply -f - <<'EOF'
+kss apply -f - <<'EOF' &&
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -167,13 +167,12 @@ spec:
               k8s-app: kube-dns
       ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
 EOF
-```
-
-```sh
 kss run np-probe --rm -i --restart=Never --labels=app.kubernetes.io/name=np-probe \
   --image=docker.io/library/busybox:1.37 \
   --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"np-probe","image":"docker.io/library/busybox:1.37","command":["sh","-c","nslookup '"$CLUSTER"'-rw.starstar.svc.cluster.local >/dev/null && echo DNS-OK || echo DNS-FAIL; for t in '"$PGIP"':5432 '"$PGIP"':8000 '"$APIIP"':8080; do nc -w 3 ${t%:*} ${t#*:} </dev/null && echo \"$t OPEN\" || echo \"$t BLOCKED\"; done"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}'
-kss delete networkpolicy np-probe-egress --ignore-not-found
+probe_status=$?
+kss delete networkpolicy np-probe-egress --ignore-not-found || probe_status=1
+[ "$probe_status" -eq 0 ]
 ```
 
 Expect `DNS-OK` (the probe's networking works), then `BLOCKED` for all three targets. Make sure `np-probe-egress` is gone: `kss get netpol` lists only the three `starstar-*` policies.
@@ -242,11 +241,17 @@ The check prints no URI or credentials. It requires the selected cluster RW host
 Check that the server certificate chains to the CA and contains the URI host:
 
 ```sh
-D=$(mktemp -d) \
-  && kss get secret "$CLUSTER-ca" -o jsonpath='{.data.ca\.crt}' | base64 -d > "$D/ca.crt" \
+(
+set -o pipefail
+D=$(mktemp -d) || exit 1
+status=0
+kss get secret "$CLUSTER-ca" -o jsonpath='{.data.ca\.crt}' | base64 -d > "$D/ca.crt" \
   && kss get secret "$CLUSTER-server" -o jsonpath='{.data.tls\.crt}' | base64 -d > "$D/server.crt" \
   && openssl verify -CAfile "$D/ca.crt" -verify_hostname "${CLUSTER}-rw.starstar" "$D/server.crt" \
-  && echo "P6 chain+SAN OK"; rm -rf "$D"
+  && echo "P6 chain+SAN OK" || status=$?
+rm -rf "$D" || status=1
+exit "$status"
+)
 ```
 
 These files are a CA certificate and a server certificate, not keys. Nothing secret is written.
@@ -277,7 +282,14 @@ Expect: right host and CA → a password or authentication message (TLS succeede
 ### P7. Pod Security on CNPG-created pods
 
 ```sh
-kss get events --sort-by=.lastTimestamp | grep -iE 'podsecurity|forbidden' ; echo "grep exit $? (expect 1)"
+EVENTS=$(kss get events --sort-by=.lastTimestamp) && {
+  if printf '%s\n' "$EVENTS" | grep -iE 'podsecurity|forbidden'; then
+    echo 'P7 failed: matching events found' >&2; false
+  else
+    status=$?
+    [ "$status" -eq 1 ] && echo 'P7 OK: no matching events'
+  fi
+}
 ```
 
 Expect no matches. This covers the initdb Job and the instance, which the server dry run did not check.
@@ -288,7 +300,7 @@ Every upgrade uses the same preflight as the first deploy. `strategy: Recreate` 
 
 1. Set the new digest in `kustomization.yaml`.
 2. If the release adds a migration, take a [manual dump](#manual-dump) first.
-3. Run the gate and the apply as one block. Keep the output: the `rollback image:` line is the Ready pod imageID digest. Preserve this verified record across retries. If there is no Ready pod, pass that recorded full image as the second preflight argument; never use the failed Deployment template as a rollback target.
+3. Run the gate and the apply as one block. Keep the output: the `rollback image:` line is the pinned image from the Ready pod's spec. Preserve this verified record across retries. If there is no Ready pod, pass that recorded full image as the second preflight argument; never use the failed Deployment template as a rollback target.
 
    ```sh
    LOG="preflight-$(date +%Y%m%d-%H%M%S).log"
@@ -339,11 +351,27 @@ Compare counts and application data with the source at the dump's point in time;
 
 ### Restore a manual dump into a fresh database
 
-Choose a compatible image digest **before cutover**, set it in `kustomization.yaml`, and run preflight (using the last verified rollback record if no pod is Ready). Scale the API to zero and wait until all API pods terminate. Keep it at zero throughout restore and image selection. Resolve `PG` for the selected `CLUSTER` as above. Restore into a new `starstar_restore` database using the same `createdb` and `pg_restore --exit-on-error` commands above, substituting `starstar_restore` and the selected encrypted dump. Compare counts and schema against the expected backup and check errors. Do not overwrite an existing recovery database.
+This procedure restores into a fresh database in the existing `starstar-pg` Cluster. Choose a compatible image digest, set it in `kustomization.yaml`, and run preflight while the existing API is Ready, preserving the rollback record. Scale the API to zero and wait for all API pods to terminate. Keep it at zero during the restore. Resolve `PG` as above. Restore into a new `starstar_restore` database using the `createdb` and `pg_restore --exit-on-error` commands above, substituting `starstar_restore` and the selected encrypted dump. Compare counts and schema against the expected backup and check errors. Do not overwrite an existing recovery database.
 
-Once the restored database is verified, with the API still at zero, terminate any remaining connections and rename `starstar` to `starstar_old`, then `starstar_restore` to `starstar` using separate `ALTER DATABASE` commands as a PostgreSQL administrator. Retain `starstar_old` through verification. Set the Deployment image to the chosen digest with `kubectl --context thor -n starstar set image deploy/starstar-api api='ghcr.io/hatchertechnology/starstar@sha256:<chosen-digest>'` while it remains scaled to zero. Check the Deployment image and database name, then scale to one, wait for rollout, and run P1–P7. Do not apply the normal Kustomization while stopped: it sets replicas to one. Preserve the old database until verification succeeds.
+With the API still stopped, terminate remaining connections and rename `starstar` to `starstar_old`, then `starstar_restore` to `starstar` using separate `ALTER DATABASE` commands as a PostgreSQL administrator. Retain `starstar_old` through verification.
 
-For a **replacement Cluster**, keep the API at zero and create a separately named Cluster (for example `starstar-pg2`) with the same bootstrap owner and database. Preserve the old Cluster and PVC. Add, rather than replace, NetworkPolicy rules/selectors for the new cluster, preserving the old cluster's API-server, DNS and operator paths; verify both clusters' rules. Update the API Secret references to `starstar-pg2-app` and `starstar-pg2-ca`, and the API DB egress selector. Restore and validate on its primary, perform the same rename and chosen-image cutover, and apply the changed Deployment manifest with `replicas: 0` before scaling up. Set `CLUSTER="starstar-pg2"` for P1–P7, including P3's temporary policy and P6's Secrets and TLS host. Keep the original cluster and its policies until the replacement passes all checks.
+Before applying the selected image, temporarily add the following to `kustomization.yaml` so the rendered Deployment remains stopped:
+
+```yaml
+replicas:
+  - name: starstar-api
+    count: 0
+```
+
+Confirm the chosen digest is in the `images` section, then render and apply it. `kubectl kustomize` is offline and does not use a context:
+
+```sh
+set -o pipefail
+kubectl kustomize deploy/thor | kubectl --context thor apply -f - &&
+kubectl --context thor -n starstar get deployment starstar-api -o jsonpath='{.spec.replicas}{" "}{.spec.template.spec.containers[?(@.name=="api")].image}{"\n"}'
+```
+
+Verify the output shows zero replicas and the chosen pinned image. Remove the temporary `replicas` entry from `kustomization.yaml` to restore the normal desired count, then scale to one, wait for rollout, and run P1–P7. Preserve the old database until verification succeeds. Off-node backup automation and cluster-replacement recovery are deferred follow-ups.
 
 ### How to add backups later
 
@@ -401,7 +429,7 @@ Never commit a decrypted file. Never print decrypted values.
 
 ## Known follow-ups
 
-- **Off-node backups** (above).
+- **Off-node backups and cluster-replacement recovery** are deferred follow-ups.
 - **Printer passwords are stored in plaintext** in the `printers` table. Anyone with database access, or a dump, can read every PrusaLink password. Track an app change to encrypt them at rest.
 - **Printer egress is the whole `192.168.1.0/24` on port 80.** That range includes Thor (`192.168.1.2`) and any LAN service on port 80. Narrow the range to the printers' `/32` addresses once they are fixed (DHCP reservations).
 - **Large uploads** (up to 512 MB) through the Tailscale proxy are untested. Check them during the first real use.

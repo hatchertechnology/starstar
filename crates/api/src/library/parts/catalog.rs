@@ -57,16 +57,16 @@ pub struct PartsStore {
     pub pool: PgPool,
     pub blobs: Arc<Blobs>,
 }
-fn now() -> i64 {
+pub(super) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
 }
-fn missing(what: &str) -> PartsError {
+pub(super) fn missing(what: &str) -> PartsError {
     PartsError::NotFound(format!("{what} not found"))
 }
-async fn lock(tx: &mut Transaction<'_, Postgres>, id: i64) -> Result<(), PartsError> {
+pub(super) async fn lock(tx: &mut Transaction<'_, Postgres>, id: i64) -> Result<(), PartsError> {
     let id =
         i32::try_from(id).map_err(|_| PartsError::BadRequest("part id out of range".into()))?;
     sqlx::query("SELECT pg_advisory_xact_lock(3, $1)")
@@ -160,7 +160,7 @@ impl PartsStore {
             ));
         }
         let id:i64=sqlx::query_scalar("INSERT INTO model_revisions(part_id,number,note,created_by,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id").bind(part_id).bind(number).bind(note).bind(by).bind(now()).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO part_files(part_id,model_revision_id,setup_revision_id,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,superseded_by) SELECT part_id,$1,NULL,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,NULL FROM part_files WHERE id=ANY($2)").bind(id).bind(carry).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO part_files(part_id,model_revision_id,setup_revision_id,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,note,superseded_by) SELECT part_id,$1,NULL,role,name,sha256,size,kind,meta,parsed,has_preview,uploaded_by,uploaded_at,target_family,target_nozzle,profile,note,NULL FROM part_files WHERE id=ANY($2)").bind(id).bind(carry).execute(&mut *tx).await?;
         let model = self.model(&mut tx, id).await?;
         tx.commit().await?;
         Ok(model)
@@ -468,7 +468,7 @@ impl PartsStore {
             slices,
         })
     }
-    async fn files(
+    pub(super) async fn files(
         &self,
         conn: &mut PgConnection,
         query: &str,
@@ -517,7 +517,7 @@ impl PartsStore {
                     has_preview: r.try_get("has_preview")?,
                     target,
                     superseded_by: r.try_get("superseded_by")?,
-                    note: None,
+                    note: r.try_get("note")?,
                     uploaded_by: r.try_get("uploaded_by")?,
                     uploaded_at: r.try_get("uploaded_at")?,
                 })

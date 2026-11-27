@@ -1,0 +1,47 @@
+# CloudNativePG cluster for Starstar. The operator creates:
+#   Services starstar-pg-rw / -ro / -r, Secret starstar-pg-app (key `uri` is
+#   used by the API), Secret starstar-pg-ca (key `ca.crt` lets the API verify
+#   the server certificate), and a local-path PVC owned by this Cluster.
+# DATA SAFETY: deleting this Cluster deletes the PVC and the data (local-path
+# reclaim policy is Delete). There is no off-node backup yet; see README.md.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: starstar-pg
+  namespace: starstar
+  labels:
+    app.kubernetes.io/name: starstar
+    app.kubernetes.io/component: database
+spec:
+  instances: 1
+  # Thor-standard PostgreSQL 17 pin; matches CI and the Compose tests.
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-system-trixie@sha256:53ffa45bab8fe6434b07273d99ff183ee243624f8af1aed3147ca5488c7b4efc
+  enableSuperuserAccess: false
+  enablePDB: true
+  bootstrap:
+    initdb:
+      database: starstar
+      owner: starstar
+      encoding: UTF8
+      localeCType: C
+      localeCollate: C
+  postgresql:
+    pg_hba:
+      # Refuse every TCP connection that is not TLS. The operator's fixed
+      # rules (local socket, streaming_replica over hostssl) come before
+      # this line and the default `host all all all scram-sha-256` after it,
+      # so only TLS clients with a password reach the database.
+      - hostnossl all all all reject
+  storage:
+    storageClass: local-path
+    size: 10Gi
+    # Kept for parity with other Thor CNPG clusters. local-path does not
+    # support volume expansion (ALLOWVOLUMEEXPANSION=false), so raising
+    # `size` later does NOT grow the existing PVC in place.
+    resizeInUseVolumes: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi

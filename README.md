@@ -97,6 +97,10 @@ The skill at [`skills/starstar`](skills/starstar/SKILL.md) covers the CLI, the m
 
 [`prints/cube-12mm`](prints/cube-12mm/README.md) is a 12 mm test cube, already sliced for the MK4, MK4S and MINI (about 9 minutes on an MK4). Nothing in it has been sent to a printer.
 
+## Deploying to Thor (k3s)
+
+[`deploy/thor/`](deploy/thor/README.md) contains the Kustomize manifests and [runbook](deploy/thor/README.md) for a dedicated namespace, CloudNativePG database, API, tailnet-only Tailscale Ingress, and default-deny NetworkPolicies. Follow the staged deployment and preflight in the runbook. Never use `--prune` or `kubectl delete -k`: deleting the database Cluster deletes its data, and off-node backups are not configured.
+
 ## Deploying behind a proxy
 
 The API rate-limits sign-ins by client IP. It takes that IP from the socket peer, and from `X-Forwarded-For` only when the peer is in `STARSTAR_TRUSTED_PROXIES`. When `STARSTAR_BIND` is a loopback address (the default) and the variable is unset, `127.0.0.1/32` and `::1/128` are trusted. On any other bind address nothing is trusted by default. The effective list is printed at startup.

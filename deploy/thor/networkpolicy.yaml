@@ -1,0 +1,128 @@
+# Default deny for every pod in the namespace, then one allow policy per role.
+# Node-originated traffic (kubelet probes) is not subject to these policies.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: starstar-default-deny
+  namespace: starstar
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: starstar-api
+  namespace: starstar
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: starstar
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the Tailscale proxy pod created for Ingress starstar/starstar.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tailscale
+          podSelector:
+            matchLabels:
+              tailscale.com/managed: "true"
+              tailscale.com/parent-resource: starstar
+              tailscale.com/parent-resource-ns: starstar
+              tailscale.com/parent-resource-type: ingress
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: starstar-pg
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # PrusaLink printers: LAN 192.168.1.0/24, HTTP port 80 only.
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.0/24
+      ports:
+        - port: 80
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: starstar-postgres
+  namespace: starstar
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: starstar-pg
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: starstar
+              app.kubernetes.io/component: api
+      ports:
+        - port: 5432
+          protocol: TCP
+    # CNPG operator -> instance manager status endpoint.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+      ports:
+        - port: 8000
+          protocol: TCP
+  egress:
+    # Instance manager and initdb job -> Kubernetes API server, before
+    # (Service IP) and after (node endpoint) kube-proxy DNAT.
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.1/32
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.2/32
+      ports:
+        - port: 6443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

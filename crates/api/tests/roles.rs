@@ -337,7 +337,7 @@ fn routes() -> Vec<(Method, &'static str, Role)> {
         (M::POST, "/api/parts/1/setups", Operator),
         (M::POST, "/api/parts/1/files?name=a.step", Operator),
         (M::GET, "/api/parts/1/match", Operator),
-        (M::PATCH, "/api/setups/1", Admin),
+        (M::PATCH, "/api/setups/1", Operator),
         (M::DELETE, "/api/setups/1", Admin),
         (M::POST, "/api/setups/1/revisions", Operator),
         (M::DELETE, "/api/model-revisions/1", Admin),
@@ -633,5 +633,45 @@ async fn part_deletion_requires_admin_and_deletes_the_part() {
             .await
             .status,
         404
+    );
+}
+
+#[tokio::test]
+async fn operator_can_set_default_profile_but_cannot_delete_setup() {
+    let api = TestApi::start().await;
+    let part = api
+        .send_json(
+            Role::Operator,
+            Method::POST,
+            "/api/parts",
+            json!({"name": "Part"}),
+        )
+        .await
+        .json();
+    let setup = api
+        .send_json(
+            Role::Operator,
+            Method::POST,
+            &format!("/api/parts/{}/setups", part["id"]),
+            json!({"name": "Setup"}),
+        )
+        .await
+        .json();
+    let path = format!("/api/setups/{}", setup["id"]);
+    let result = api
+        .send_json(
+            Role::Operator,
+            Method::PATCH,
+            &path,
+            json!({"default_profile": "Fast"}),
+        )
+        .await;
+    assert_eq!(result.status, StatusCode::OK);
+    assert_eq!(result.json()["default_profile"], "Fast");
+    assert_eq!(
+        api.call(Role::Operator, Method::DELETE, &path, &[], Body::empty())
+            .await
+            .status,
+        StatusCode::FORBIDDEN
     );
 }

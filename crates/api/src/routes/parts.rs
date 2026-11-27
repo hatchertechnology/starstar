@@ -187,7 +187,7 @@ struct SetupPatch {
     default_profile: Option<Option<String>>,
 }
 async fn patch_setup(
-    _: Admin,
+    _: Operator,
     State(s): State<AppState>,
     Path(id): Path<i64>,
     Json(q): Json<SetupPatch>,

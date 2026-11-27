@@ -40,3 +40,8 @@ export function parseFolderQuery(q: LocationQuery): { storage?: string; segments
   const dir = one(q.dir)
   return { storage: storage || undefined, segments: dir ? splitPath(dir) : [] }
 }
+
+/** API path for a library file or its content. */
+export function libraryPath(id?: number, suffix?: 'preview' | 'download'): string {
+  return ['/api/library', ...(id === undefined ? [] : [String(id)]), ...(suffix ? [suffix] : [])].join('/')
+}

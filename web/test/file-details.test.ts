@@ -157,6 +157,13 @@ describe('file details page', () => {
     w.unmount()
   })
 
+  it('shows an explicit false printing status', async () => {
+    stubFetch(routes({ [`HEAD ${FILE}`]: { status: 200, headers: { 'currently-printed': 'false' } } }))
+    const w = await mount()
+    expect(w.find('dl').text()).toContain('Printing nowno')
+    w.unmount()
+  })
+
   it('warns when the file was sliced for a different nozzle', async () => {
     stubFetch(routes({ 'GET /api/printers/mk4/info': { body: { name: 'mk4', kind: 'mk4', firmware: '6.2', api_version: '2', nozzle_diameter: 0.6 } } }))
     const w = await mount()

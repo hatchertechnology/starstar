@@ -15,6 +15,7 @@ async function signOut() {
       <NuxtLink class="wordmark" to="/">starstar</NuxtLink>
       <nav aria-label="Main">
         <NuxtLink to="/">Printers</NuxtLink>
+        <NuxtLink to="/library">Library</NuxtLink>
         <NuxtLink to="/apps">Apps</NuxtLink>
         <NuxtLink v-if="can('admin')" to="/users">Users</NuxtLink>
         <NuxtLink to="/account">Account</NuxtLink>

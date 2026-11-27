@@ -2,7 +2,6 @@
 import type { FileEntry, PrinterInfo, PrinterSummary } from '~/types/api'
 import { ApiRequestError, errorMessage } from '~/utils/api'
 import { slicedMismatch } from '~/utils/compat'
-import { formatBytes, formatDate, formatDuration } from '~/utils/format'
 import { filePath, folderQuery, printerPath, thumbnailPath } from '~/utils/paths'
 import { roleAtLeast } from '~/utils/roles'
 
@@ -133,17 +132,7 @@ const m = computed(() => file.value?.meta ?? null)
 
         <div class="stack">
           <Notice v-if="mismatch" kind="info">{{ mismatch }}</Notice>
-          <dl class="facts">
-            <template v-if="m?.printer_model"><dt>Sliced for</dt><dd>{{ m.printer_model }}</dd></template>
-            <template v-if="m?.nozzle_diameter != null"><dt>Nozzle</dt><dd>{{ m.nozzle_diameter }} mm</dd></template>
-            <template v-if="m?.layer_height != null"><dt>Layer height</dt><dd>{{ m.layer_height }} mm</dd></template>
-            <template v-if="m?.filament_type"><dt>Filament</dt><dd>{{ m.filament_type }}<template v-if="m.filament_used_g != null"> · {{ m.filament_used_g }} g</template></dd></template>
-            <template v-if="m?.nozzle_temp != null || m?.bed_temp != null"><dt>Temperatures</dt><dd>nozzle {{ m?.nozzle_temp ?? '—' }} °C · bed {{ m?.bed_temp ?? '—' }} °C</dd></template>
-            <template v-if="m?.estimated_print_time != null"><dt>Estimated time</dt><dd>{{ formatDuration(m.estimated_print_time) }}</dd></template>
-            <dt>Size</dt><dd>{{ formatBytes(file.size) }}</dd>
-            <template v-if="file.modified"><dt>Modified</dt><dd>{{ formatDate(file.modified) }}</dd></template>
-            <template v-if="printingNow !== null"><dt>Printing now</dt><dd>{{ printingNow ? 'yes' : 'no' }}</dd></template>
-          </dl>
+          <PrintFacts :meta="m" :size="file.size" :modified="file.modified" :printing-now="printingNow" />
 
           <div v-if="canPrint || canDelete" class="actions">
             <button v-if="canPrint" type="button" class="btn btn-primary" :disabled="running" :title="running ? 'A job is already running.' : undefined" @click="pending = 'print'; actionError = null">Print</button>
@@ -163,9 +152,6 @@ h1 { overflow-wrap: anywhere; }
 .cols { display: grid; gap: var(--s6); }
 .preview { margin: 0; }
 .preview img { display: block; width: 100%; max-width: 30rem; height: auto; }
-.facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--s2) var(--s4); margin: 0 0 var(--s4); }
-.facts dt { color: var(--muted, inherit); }
-.facts dd { margin: 0; }
 .actions { display: flex; gap: var(--s3); }
 @media (min-width: 64rem) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 </style>

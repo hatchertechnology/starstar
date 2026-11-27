@@ -142,3 +142,18 @@ export interface Camera {
   stored: boolean
   linked: boolean
 }
+
+export type LibraryKind = 'bgcode' | 'gcode'
+export interface LibraryFile {
+  id: number
+  name: string
+  version: number
+  sha256: string
+  size: number
+  kind: LibraryKind
+  meta?: PrintMeta | null
+  parsed: boolean
+  has_preview: boolean
+  uploaded_by: string
+  uploaded_at: number
+}

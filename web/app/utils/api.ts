@@ -9,6 +9,7 @@ export type Method = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 export interface RequestOptions {
   method?: Method
+  body?: Blob | File
   json?: unknown
   query?: Record<string, string | boolean | undefined>
   signal?: AbortSignal
@@ -47,7 +48,8 @@ export function createApi(deps: ApiDeps): Api {
   return async <T>(path: string, opts: RequestOptions = {}): Promise<T | null> => {
     const method = opts.method ?? 'GET'
     const headers = new Headers({ Accept: 'application/json' })
-    let body: string | undefined
+    let body: string | Blob | undefined = opts.body
+    if (opts.body?.type) headers.set('Content-Type', opts.body.type)
     if (opts.json !== undefined) {
       headers.set('Content-Type', 'application/json')
       body = JSON.stringify(opts.json)
